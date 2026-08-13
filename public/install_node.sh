@@ -1,8 +1,10 @@
 #!/bin/bash
 #
-# Xboard Node multi-backend deployment script v3
-# Architecture: xboard-node + xray-core + hysteria2 + tuic + ss-rust
-# Ports: randomly assigned
+# Xboard Node Deployment Script v4
+# Architecture:
+#   - xboard-node: handles xray(VLESS/gRPC/Trojan/VMess) + SS automatically
+#   - hysteria2:   independent service (4 instances)
+#   - tuic-server:  independent service (2 instances)
 #
 # Usage:
 #   curl -fsSL <panel>/install_node.sh | sudo bash -s -- \
@@ -61,16 +63,18 @@ get_arch() {
 
 echo ""
 echo -e "${CYAN}=======================================================${NC}"
-echo -e "${CYAN}  Xboard Multi-Backend Node Deployment v2${NC}"
-echo -e "${CYAN}  xboard-node + xray + hy2 + tuic + ss-rust + naive${NC}"
+echo -e "${CYAN}  Xboard Node Deployment v4${NC}"
+echo -e "${CYAN}  xboard-node (xray+SS) + hysteria2 + tuic${NC}"
 echo -e "${CYAN}=======================================================${NC}"
 echo ""
 
 mkdir -p "$CONFIG_DIR" "$CERT_DIR"
 ARCH=$(get_arch)
 
-# [1/13] Dependencies
-echo -e "${BLUE}[1/13] Installing dependencies ...${NC}"
+# ============================================================
+# [1/9] Dependencies
+# ============================================================
+echo -e "${BLUE}[1/9] Installing dependencies ...${NC}"
 if command -v apt-get &>/dev/null; then
     sed -i '/backports/d' /etc/apt/sources.list 2>/dev/null || true
     for f in /etc/apt/sources.list.d/*.list; do
@@ -82,15 +86,16 @@ elif command -v yum &>/dev/null; then
     yum install -y -q curl jq openssl unzip wget 2>/dev/null || true
 fi
 if ! command -v jq &>/dev/null; then
-    echo -e "  ${YELLOW}Installing jq binary...${NC}"
     JQ_ARCH="amd64"; [[ "$ARCH" == "arm64" ]] && JQ_ARCH="arm64"
     curl -fsSL -o /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${JQ_ARCH}" 2>/dev/null
     chmod +x /usr/local/bin/jq 2>/dev/null || true
 fi
 echo -e "  ${GREEN}OK${NC}"
 
-# [2/13] xboard-node
-echo -e "${BLUE}[2/13] Installing xboard-node ...${NC}"
+# ============================================================
+# [2/9] xboard-node (handles xray + SS + user sync + traffic)
+# ============================================================
+echo -e "${BLUE}[2/9] Installing xboard-node ...${NC}"
 if ! systemctl is-active --quiet xboard-node 2>/dev/null; then
     curl -fsSL https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh | bash -s -- \
         --mode machine --panel "$PANEL_URL" --token "$TOKEN" --machine-id "$MACHINE_ID" 2>&1 | tail -5
@@ -99,23 +104,20 @@ else
     echo -e "  ${YELLOW}Already running${NC}"
 fi
 
-# [3/13] xray-core
-echo -e "${BLUE}[3/13] Installing xray-core ...${NC}"
-if ! command -v xray &>/dev/null; then
-    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>&1 | tail -3
-fi
-echo -e "  ${GREEN}OK: $(xray version 2>/dev/null | head -1 || echo 'installed')${NC}"
-
-# [4/13] Hysteria 2
-echo -e "${BLUE}[4/13] Installing Hysteria 2 ...${NC}"
+# ============================================================
+# [3/9] Hysteria 2
+# ============================================================
+echo -e "${BLUE}[3/9] Installing Hysteria 2 ...${NC}"
 HY2_BIN="/usr/local/bin/hysteria"
 if [[ ! -f "$HY2_BIN" ]]; then
     bash <(curl -fsSL https://get.hy2.sh/) 2>&1 | tail -3
 fi
 echo -e "  ${GREEN}OK${NC}"
 
-# [5/13] TUIC v5
-echo -e "${BLUE}[5/13] Installing TUIC v5 ...${NC}"
+# ============================================================
+# [4/9] TUIC v5
+# ============================================================
+echo -e "${BLUE}[4/9] Installing TUIC v5 ...${NC}"
 TUIC_BIN="/usr/local/bin/tuic-server"
 if [[ ! -f "$TUIC_BIN" ]]; then
     TUIC_VER="tuic-server-1.0.0"
@@ -126,29 +128,10 @@ if [[ ! -f "$TUIC_BIN" ]]; then
 fi
 [[ -f "$TUIC_BIN" ]] && echo -e "  ${GREEN}OK${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
 
-# [6/13] Shadowsocks-Rust
-echo -e "${BLUE}[6/13] Installing Shadowsocks-Rust ...${NC}"
-SS_BIN="/usr/local/bin/ssserver"
-if [[ ! -f "$SS_BIN" ]]; then
-    SS_VER="v1.21.2"
-    command -v jq &>/dev/null && SS_VER=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.21.2"') || true
-    SS_ASSET="shadowsocks-${SS_VER}.x86_64-unknown-linux-musl.tar.xz"
-    [[ "$ARCH" == "arm64" ]] && SS_ASSET="shadowsocks-${SS_VER}.aarch64-unknown-linux-musl.tar.xz"
-    curl -fsSL -o /tmp/ss-rust.tar.xz "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VER}/${SS_ASSET}" 2>/dev/null
-    if [[ -f /tmp/ss-rust.tar.xz ]]; then
-        tar -xJf /tmp/ss-rust.tar.xz -C /usr/local/bin/ ssserver 2>/dev/null || tar -xJf /tmp/ss-rust.tar.xz -C /usr/local/bin/ 2>/dev/null
-        chmod +x "$SS_BIN" 2>/dev/null || true
-        rm -f /tmp/ss-rust.tar.xz
-    fi
-fi
-[[ -f "$SS_BIN" ]] && echo -e "  ${GREEN}OK: $($SS_BIN --version 2>/dev/null || echo 'ssserver')${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
-
-# [7/13] skip (reserved)
-echo -e "${BLUE}[7/13] Skipping NaiveProxy (server binary not available in China)${NC}"
-NAIVE_BIN=""
-
-# [8/13] TLS cert + Reality keys
-echo -e "${BLUE}[8/13] Generating certs and keys ...${NC}"
+# ============================================================
+# [5/9] TLS certs + xray for Reality key generation
+# ============================================================
+echo -e "${BLUE}[5/9] Generating certs and keys ...${NC}"
 CERT_FILE="${CERT_DIR}/fullchain.pem"
 KEY_FILE="${CERT_DIR}/key.pem"
 if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
@@ -156,9 +139,14 @@ if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
         -days 3650 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" \
         -subj "/CN=www.bing.com" 2>/dev/null
 fi
+# Install xray just for key generation if not present
+if ! command -v xray &>/dev/null; then
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>&1 | tail -3
+    # Disable standalone xray service - xboard-node handles it
+    systemctl stop xray 2>/dev/null || true
+    systemctl disable xray 2>/dev/null || true
+fi
 REALITY_OUTPUT=$(xray x25519 2>/dev/null || true)
-# Xray 26.x format: "PrivateKey: xxx" and "Password (PublicKey): xxx"
-# Older format: "Private key: xxx" and "Public key: xxx"
 REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep -i 'privatekey\|private key' | awk '{print $NF}' || true)
 REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep -i 'publickey\|public key' | awk '{print $NF}' || true)
 REALITY_SHORT_ID=$(openssl rand -hex 4)
@@ -167,141 +155,40 @@ if [[ -z "$REALITY_PRIVATE_KEY" || -z "$REALITY_PUBLIC_KEY" ]]; then
     echo -e "  Output: $REALITY_OUTPUT"
     exit 1
 fi
-echo -e "  ${GREEN}OK: Reality ${REALITY_PUBLIC_KEY:0:16}...${NC}"
+echo -e "  ${GREEN}OK${NC}"
 
-# [9/13] Random ports
-echo -e "${BLUE}[9/13] Assigning random ports ...${NC}"
+# ============================================================
+# [6/9] Assign random ports
+# ============================================================
+echo -e "${BLUE}[6/9] Assigning random ports ...${NC}"
 SERVER_IP=$(get_server_ip)
 echo -e "  IP: ${GREEN}${SERVER_IP}${NC}"
 
+# 18 ports: 9 direct + 9 warp
 ALL_PORTS=($(generate_random_ports 18))
 
+# Direct ports
 P_VLESS_R=${ALL_PORTS[0]}; P_VLESS_G=${ALL_PORTS[1]}; P_TROJAN=${ALL_PORTS[2]}
 P_VMESS=${ALL_PORTS[3]}; P_HY2=${ALL_PORTS[4]}; P_HY2O=${ALL_PORTS[5]}
 P_SS22=${ALL_PORTS[6]}; P_SSC=${ALL_PORTS[7]}; P_TUIC=${ALL_PORTS[8]}
 
+# WARP ports
 PW_VLESS_R=${ALL_PORTS[9]}; PW_VLESS_G=${ALL_PORTS[10]}; PW_TROJAN=${ALL_PORTS[11]}
 PW_VMESS=${ALL_PORTS[12]}; PW_HY2=${ALL_PORTS[13]}; PW_HY2O=${ALL_PORTS[14]}
 PW_SS22=${ALL_PORTS[15]}; PW_SSC=${ALL_PORTS[16]}; PW_TUIC=${ALL_PORTS[17]}
 
 OBFS_PASSWORD=$(openssl rand -hex 8)
 
-echo -e "  xray:      VLESS:${P_VLESS_R} gRPC:${P_VLESS_G} Trojan:${P_TROJAN} VMess:${P_VMESS}"
-echo -e "  hysteria2: Hy2:${P_HY2} Hy2OBFS:${P_HY2O}"
-echo -e "  tuic:      TUIC:${P_TUIC}"
-echo -e "  ss-rust:   SS2022:${P_SS22} SSClassic:${P_SSC}"
+echo -e "  ${YELLOW}xboard-node:${NC} VLESS:${P_VLESS_R} gRPC:${P_VLESS_G} Trojan:${P_TROJAN} VMess:${P_VMESS} SS:${P_SS22},${P_SSC}"
+echo -e "  ${YELLOW}hysteria2:${NC}   Hy2:${P_HY2} Hy2OBFS:${P_HY2O}"
+echo -e "  ${YELLOW}tuic:${NC}        TUIC:${P_TUIC}"
 
-# [10/13] Generate config files
-echo -e "${BLUE}[10/13] Generating config files ...${NC}"
+# ============================================================
+# [7/9] Generate config files (hy2 + tuic only)
+# ============================================================
+echo -e "${BLUE}[7/9] Generating config files ...${NC}"
 
-# xray-core config
-cat > "${CONFIG_DIR}/xray.json" << XEOF
-{
-  "log": {"loglevel": "warning"},
-  "inbounds": [
-    {
-      "tag": "vless-reality-vision", "listen": "0.0.0.0", "port": ${P_VLESS_R},
-      "protocol": "vless",
-      "settings": {"clients": [], "decryption": "none"},
-      "streamSettings": {
-        "network": "tcp", "security": "reality",
-        "realitySettings": {
-          "dest": "www.microsoft.com:443", "serverNames": ["www.microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE_KEY}", "shortIds": ["${REALITY_SHORT_ID}"]
-        }
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "vless-grpc", "listen": "0.0.0.0", "port": ${P_VLESS_G},
-      "protocol": "vless",
-      "settings": {"clients": [], "decryption": "none"},
-      "streamSettings": {
-        "network": "grpc", "grpcSettings": {"serviceName": "grpc"},
-        "security": "reality",
-        "realitySettings": {
-          "dest": "www.microsoft.com:443", "serverNames": ["www.microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE_KEY}", "shortIds": ["${REALITY_SHORT_ID}"]
-        }
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "trojan-reality", "listen": "0.0.0.0", "port": ${P_TROJAN},
-      "protocol": "trojan",
-      "settings": {"clients": []},
-      "streamSettings": {
-        "network": "tcp", "security": "reality",
-        "realitySettings": {
-          "dest": "www.microsoft.com:443", "serverNames": ["www.microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE_KEY}", "shortIds": ["${REALITY_SHORT_ID}"]
-        }
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "vmess-ws", "listen": "0.0.0.0", "port": ${P_VMESS},
-      "protocol": "vmess",
-      "settings": {"clients": []},
-      "streamSettings": {"network": "ws", "wsSettings": {"path": "/ws"}},
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "vless-reality-vision-warp", "listen": "0.0.0.0", "port": ${PW_VLESS_R},
-      "protocol": "vless",
-      "settings": {"clients": [], "decryption": "none"},
-      "streamSettings": {
-        "network": "tcp", "security": "reality",
-        "realitySettings": {
-          "dest": "www.microsoft.com:443", "serverNames": ["www.microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE_KEY}", "shortIds": ["${REALITY_SHORT_ID}"]
-        }
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "vless-grpc-warp", "listen": "0.0.0.0", "port": ${PW_VLESS_G},
-      "protocol": "vless",
-      "settings": {"clients": [], "decryption": "none"},
-      "streamSettings": {
-        "network": "grpc", "grpcSettings": {"serviceName": "grpc"},
-        "security": "reality",
-        "realitySettings": {
-          "dest": "www.microsoft.com:443", "serverNames": ["www.microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE_KEY}", "shortIds": ["${REALITY_SHORT_ID}"]
-        }
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "trojan-reality-warp", "listen": "0.0.0.0", "port": ${PW_TROJAN},
-      "protocol": "trojan",
-      "settings": {"clients": []},
-      "streamSettings": {
-        "network": "tcp", "security": "reality",
-        "realitySettings": {
-          "dest": "www.microsoft.com:443", "serverNames": ["www.microsoft.com"],
-          "privateKey": "${REALITY_PRIVATE_KEY}", "shortIds": ["${REALITY_SHORT_ID}"]
-        }
-      },
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    },
-    {
-      "tag": "vmess-ws-warp", "listen": "0.0.0.0", "port": ${PW_VMESS},
-      "protocol": "vmess",
-      "settings": {"clients": []},
-      "streamSettings": {"network": "ws", "wsSettings": {"path": "/ws"}},
-      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
-    }
-  ],
-  "outbounds": [
-    {"tag": "direct", "protocol": "freedom"},
-    {"tag": "block", "protocol": "blackhole"}
-  ]
-}
-XEOF
-
-# Hysteria 2 configs
+# Hysteria 2 configs (4 instances: direct, obfs, warp, obfs-warp)
 for INST in "hy2.yaml:${P_HY2}:" "hy2-obfs.yaml:${P_HY2O}:${OBFS_PASSWORD}" "hy2-warp.yaml:${PW_HY2}:" "hy2-obfs-warp.yaml:${PW_HY2O}:${OBFS_PASSWORD}"; do
     IFS=':' read -r FNAME FPORT FOBFS <<< "$INST"
     OBFS_BLOCK=""
@@ -332,7 +219,7 @@ masquerade:
 HY2EOF
 done
 
-# TUIC v5
+# TUIC v5 configs (2 instances: direct, warp)
 for INST in "tuic.json:${P_TUIC}" "tuic-warp.json:${PW_TUIC}"; do
     IFS=':' read -r FNAME FPORT <<< "$INST"
     cat > "${CONFIG_DIR}/${FNAME}" << TUICEOF
@@ -348,23 +235,12 @@ for INST in "tuic.json:${P_TUIC}" "tuic-warp.json:${PW_TUIC}"; do
 TUICEOF
 done
 
-# Shadowsocks-Rust
-SS_SERVER_KEY=$(openssl rand -base64 32)
-cat > "${CONFIG_DIR}/ss.json" << SSEOF
-{
-  "servers": [
-    {"server": "::", "server_port": ${P_SS22}, "method": "2022-blake3-aes-256-gcm", "password": "${SS_SERVER_KEY}", "mode": "tcp_and_udp"},
-    {"server": "::", "server_port": ${P_SSC}, "method": "aes-256-gcm", "password": "xboard-ss-classic", "mode": "tcp_and_udp"},
-    {"server": "::", "server_port": ${PW_SS22}, "method": "2022-blake3-aes-256-gcm", "password": "${SS_SERVER_KEY}", "mode": "tcp_and_udp"},
-    {"server": "::", "server_port": ${PW_SSC}, "method": "aes-256-gcm", "password": "xboard-ss-classic", "mode": "tcp_and_udp"}
-  ]
-}
-SSEOF
-
 echo -e "  ${GREEN}OK${NC}"
 
-# [11/13] Register nodes
-echo -e "${BLUE}[11/13] Registering nodes ...${NC}"
+# ============================================================
+# [8/9] Register nodes in panel
+# ============================================================
+echo -e "${BLUE}[8/9] Registering nodes ...${NC}"
 
 cat > "${CONFIG_DIR}/.env" << ENVEOF
 PANEL_URL=${PANEL_URL}
@@ -375,7 +251,6 @@ REALITY_PRIVATE_KEY=${REALITY_PRIVATE_KEY}
 REALITY_PUBLIC_KEY=${REALITY_PUBLIC_KEY}
 REALITY_SHORT_ID=${REALITY_SHORT_ID}
 OBFS_PASSWORD=${OBFS_PASSWORD}
-SS_SERVER_KEY=${SS_SERVER_KEY}
 ENVEOF
 chmod 600 "${CONFIG_DIR}/.env"
 
@@ -418,116 +293,26 @@ SETUP_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/autoSetup" 
     -H "Content-Type: application/json" -d "$SETUP_BODY" 2>/dev/null) || SETUP_RESPONSE=""
 
 if [[ -n "$SETUP_RESPONSE" ]]; then
-    NC_VAL=$(echo "$SETUP_RESPONSE" | jq -r '.data.nodes_created // 0')
+    NC_VAL=$(echo "$SETUP_RESPONSE" | jq -r '.data.nodes_created // 0' || echo "?")
     echo -e "  ${GREEN}OK: Created ${NC_VAL} nodes${NC}"
 else
     echo -e "  ${RED}FAIL: API registration failed${NC}"
 fi
 
-# [12/13] User sync script
-echo -e "${BLUE}[12/13] Creating user sync script ...${NC}"
+# ============================================================
+# [9/9] Firewall + systemd + start services
+# ============================================================
+echo -e "${BLUE}[9/9] Starting services ...${NC}"
 
-cat > "${CONFIG_DIR}/sync_users.sh" << 'SYNCEOF'
-#!/bin/bash
-set -euo pipefail
-CONFIG_DIR="/etc/xboard-node"
-source "${CONFIG_DIR}/.env"
-
-NODES_RESP=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/nodes" \
-    -H "Content-Type: application/json" \
-    -d "{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\"}" 2>/dev/null)
-[[ -z "$NODES_RESP" ]] && exit 1
-
-NODE_ID=$(echo "$NODES_RESP" | jq -r '.data[0].id // empty' 2>/dev/null)
-[[ -z "$NODE_ID" ]] && exit 1
-
-USERS_RESP=$(curl -s "${PANEL_URL}/api/v2/server/user?token=${TOKEN}&node_id=${NODE_ID}" 2>/dev/null)
-UUIDS=($(echo "$USERS_RESP" | jq -r '.users[]?.uuid // empty' 2>/dev/null | sort -u))
-[[ ${#UUIDS[@]} -eq 0 ]] && exit 0
-
-echo "[$(date)] Syncing ${#UUIDS[@]} users"
-
-# Update xray-core
-XRAY_VLESS='['; XRAY_VLESS_NF='['; XRAY_TROJAN='['; XRAY_VMESS='['
-for i in "${!UUIDS[@]}"; do
-    U="${UUIDS[$i]}"
-    [[ $i -gt 0 ]] && XRAY_VLESS+="," && XRAY_VLESS_NF+="," && XRAY_TROJAN+="," && XRAY_VMESS+=","
-    XRAY_VLESS+="{\"id\":\"${U}\",\"flow\":\"xtls-rsa-vision\",\"level\":0}"
-    XRAY_VLESS_NF+="{\"id\":\"${U}\",\"level\":0}"
-    XRAY_TROJAN+="{\"password\":\"${U}\",\"level\":0}"
-    XRAY_VMESS+="{\"id\":\"${U}\",\"level\":0}"
-done
-XRAY_VLESS+=']'; XRAY_VLESS_NF+=']'; XRAY_TROJAN+=']'; XRAY_VMESS+=']'
-
-TMP=$(mktemp)
-jq --argjson vc "$XRAY_VLESS" --argjson vn "$XRAY_VLESS_NF" \
-   --argjson tc "$XRAY_TROJAN" --argjson mc "$XRAY_VMESS" \
-   '.inbounds |= map(
-     if (.tag | test("vless.*vision")) then .settings.clients = $vc
-     elif (.tag | test("vless.*grpc")) then .settings.clients = $vn
-     elif (.tag | test("trojan")) then .settings.clients = $tc
-     elif (.tag | test("vmess")) then .settings.clients = $mc
-     else . end
-   )' "${CONFIG_DIR}/xray.json" > "$TMP" && mv "$TMP" "${CONFIG_DIR}/xray.json"
-killall -SIGHUP xray 2>/dev/null || systemctl restart xray 2>/dev/null || true
-
-# Update Hysteria2
-for CFG in hy2.yaml hy2-obfs.yaml hy2-warp.yaml hy2-obfs-warp.yaml; do
-    F="${CONFIG_DIR}/${CFG}"
-    [[ -f "$F" ]] || continue
-    USERPASS_LINES=""
-    for U in "${UUIDS[@]}"; do
-        USERPASS_LINES+="    ${U}: ${U}\n"
-    done
-    sed -i "s|  userpass: {}|  userpass:\n${USERPASS_LINES}|" "$F" 2>/dev/null || true
-done
-systemctl restart hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp 2>/dev/null || true
-
-# Update TUIC
-for CFG in tuic.json tuic-warp.json; do
-    F="${CONFIG_DIR}/${CFG}"
-    [[ -f "$F" ]] || continue
-    TUIC_USERS="{"
-    for i in "${!UUIDS[@]}"; do
-        U="${UUIDS[$i]}"
-        [[ $i -gt 0 ]] && TUIC_USERS+=","
-        TUIC_USERS+="\"${U}\":\"${U}\""
-    done
-    TUIC_USERS+="}"
-    jq --argjson u "$TUIC_USERS" '.users = $u' "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
-done
-systemctl restart tuic-direct tuic-warp 2>/dev/null || true
-
-echo "[$(date)] Sync complete"
-SYNCEOF
-
-chmod +x "${CONFIG_DIR}/sync_users.sh"
-
-CRON_LINE="* * * * * ${CONFIG_DIR}/sync_users.sh >> /var/log/xboard-sync.log 2>&1"
-EXISTING_CRON=$(crontab -l 2>/dev/null || true)
-FILTERED_CRON=$(echo "$EXISTING_CRON" | grep -v 'sync_users.sh' || true)
-echo "${FILTERED_CRON}
-${CRON_LINE}" | crontab -
-echo -e "  ${GREEN}OK${NC}"
-
-# [13/13] Firewall + systemd + start
-echo -e "${BLUE}[13/13] Starting all services ...${NC}"
-
+# Open firewall for all ports
 for port in "${ALL_PORTS[@]}"; do
     iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
-        iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
     iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || \
-        iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+        iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || true
 done
 
-mkdir -p /etc/systemd/system/xray.service.d
-cat > /etc/systemd/system/xray.service.d/override.conf << EOF
-[Service]
-User=root
-ExecStart=
-ExecStart=/usr/local/bin/xray run -config ${CONFIG_DIR}/xray.json
-EOF
-
+# Hysteria2 systemd services (4 instances)
 for INST in "hy2-direct:hy2.yaml" "hy2-obfs-direct:hy2-obfs.yaml" "hy2-warp:hy2-warp.yaml" "hy2-obfs-warp:hy2-obfs-warp.yaml"; do
     NAME="${INST%%:*}"; CFG="${INST##*:}"
 cat > "/etc/systemd/system/${NAME}.service" << EOF
@@ -543,6 +328,7 @@ WantedBy=multi-user.target
 EOF
 done
 
+# TUIC systemd services (2 instances)
 for INST in "tuic-direct:tuic.json" "tuic-warp:tuic-warp.json"; do
     NAME="${INST%%:*}"; CFG="${INST##*:}"
 cat > "/etc/systemd/system/${NAME}.service" << EOF
@@ -558,31 +344,26 @@ WantedBy=multi-user.target
 EOF
 done
 
-cat > /etc/systemd/system/ssserver.service << EOF
-[Unit]
-Description=Shadowsocks-Rust
-After=network.target
-[Service]
-ExecStart=${SS_BIN} -c ${CONFIG_DIR}/ss.json
-Restart=always
-RestartSec=3
-[Install]
-WantedBy=multi-user.target
-EOF
-
 systemctl daemon-reload
 
-SERVICES=(xray hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp tuic-direct tuic-warp ssserver)
+# Disable standalone xray/ssserver (xboard-node handles them)
+systemctl stop xray 2>/dev/null || true
+systemctl disable xray 2>/dev/null || true
+systemctl stop ssserver 2>/dev/null || true
+systemctl disable ssserver 2>/dev/null || true
 
-"${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
-
+# Start hy2 + tuic services
+SERVICES=(hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp tuic-direct tuic-warp)
 for SVC in "${SERVICES[@]}"; do
     systemctl enable "$SVC" 2>/dev/null || true
     systemctl restart "$SVC" 2>/dev/null || true
 done
 
-sleep 2
+sleep 3
 
+# ============================================================
+# Final status report
+# ============================================================
 echo ""
 echo -e "${GREEN}=======================================================${NC}"
 echo -e "${GREEN}  Deployment Complete!${NC}"
@@ -595,8 +376,9 @@ for SVC in xboard-node "${SERVICES[@]}"; do
     fi
 done
 echo -e "${GREEN}------------------------------------------------------${NC}"
-echo -e "  Config: ${CONFIG_DIR}"
-echo -e "  Sync:   Every minute (cron)"
-echo -e "  Log:    /var/log/xboard-sync.log"
+echo -e "  xboard-node: xray(VLESS/gRPC/Trojan/VMess) + SS"
+echo -e "  hysteria2:   4 instances (direct/obfs/warp/obfs-warp)"
+echo -e "  tuic:        2 instances (direct/warp)"
+echo -e "  Config:      ${CONFIG_DIR}"
 echo -e "${GREEN}=======================================================${NC}"
 echo ""
