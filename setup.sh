@@ -1132,8 +1132,14 @@ server {
         proxy_read_timeout 60s;
     }
 
+    # 节点安装脚本 (直接返回静态文件)
+    location = /install_node.sh {
+        default_type application/x-sh;
+        alias ${SITE_DIR}/public/install_node.sh;
+    }
+
     # 静态文件直接返回
-    location ~* \.(jpg|jpeg|png|gif|js|css|svg|woff2|woff|ttf|eot|wasm|json|ico)$ {
+    location ~* \.(jpg|jpeg|png|gif|js|css|svg|woff2|woff|ttf|eot|wasm|json|ico|sh|txt)$ {
         expires 7d;
         access_log off;
         try_files \$uri =404;
