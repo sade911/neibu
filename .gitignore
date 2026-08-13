@@ -1,0 +1,22 @@
+# Build
+/build/
+/app/build/
+/.gradle/
+
+# IDE
+/.idea/
+*.iml
+local.properties
+
+# Kotlin
+*.class
+
+# Libs (large binary)
+# app/libs/*.aar
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

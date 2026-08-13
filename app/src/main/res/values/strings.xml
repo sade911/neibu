@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UUVPN PRO</string>
+
+    <!-- Auth -->
+    <string name="login_title">UUVPN PRO</string>
+    <string name="login_subtitle">安全 · 快速 · 稳定</string>
+    <string name="panel_url_hint">面板地址</string>
+    <string name="email_hint">邮箱</string>
+    <string name="password_hint">密码</string>
+    <string name="login_button">登 录</string>
+    <string name="register_button">注 册</string>
+    <string name="no_account">还没有账号？注册</string>
+    <string name="has_account">已有账号？登录</string>
+    <string name="invite_code_hint">邀请码（选填）</string>
+    <string name="fill_all_fields">请填写所有字段</string>
+    <string name="login_failed">登录失败</string>
+    <string name="register_failed">注册失败</string>
+
+    <!-- Home -->
+    <string name="connected">已连接</string>
+    <string name="disconnected">未连接</string>
+    <string name="connecting">连接中…</string>
+    <string name="disconnecting">断开中…</string>
+    <string name="select_node">点击选择节点</string>
+    <string name="select_node_first">请先选择一个节点</string>
+
+    <!-- Nodes -->
+    <string name="node_list_title">节点列表</string>
+    <string name="search_node_hint">搜索节点名称或协议…</string>
+    <string name="filter_all">全部</string>
+    <string name="no_nodes">暂无节点</string>
+    <string name="speed_test">测速</string>
+    <string name="refresh">刷新</string>
+    <string name="timeout">超时</string>
+    <string name="sort_by_ping">按延迟排序</string>
+    <string name="sort_by_name">按名称排序</string>
+
+    <!-- Settings -->
+    <string name="settings_title">设置</string>
+    <string name="vpn_settings">VPN 设置</string>
+    <string name="split_tunnel">分应用代理</string>
+    <string name="split_tunnel_desc">选择哪些应用通过 VPN</string>
+    <string name="dns_mode">DNS 模式</string>
+    <string name="route_mode">路由模式</string>
+    <string name="route_bypass_cn">绕过中国大陆</string>
+    <string name="route_global">全局代理</string>
+    <string name="general_settings">通用设置</string>
+    <string name="auto_connect">自动连接</string>
+    <string name="auto_connect_desc">启动应用时自动连接</string>
+    <string name="dark_mode">深色模式</string>
+    <string name="advanced_settings">高级设置</string>
+    <string name="log_level">日志等级</string>
+    <string name="clear_cache">清除缓存</string>
+    <string name="export_log">导出日志</string>
+    <string name="view_log">查看日志</string>
+    <string name="about">关于</string>
+    <string name="version">版本</string>
+    <string name="check_update">检查更新</string>
+
+    <!-- Account -->
+    <string name="account_title">账户</string>
+    <string name="plan_info">套餐信息</string>
+    <string name="expired_at">到期时间</string>
+    <string name="permanent">永久</string>
+    <string name="traffic_usage">流量使用</string>
+    <string name="copy_subscribe_url">复制订阅链接</string>
+    <string name="refresh_subscribe">刷新订阅</string>
+    <string name="logout">退出登录</string>
+    <string name="logout_confirm">确定要退出登录吗？</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确定</string>
+    <string name="copied">已复制</string>
+
+    <!-- Log -->
+    <string name="log_title">运行日志</string>
+    <string name="clear_log">清除</string>
+    <string name="pause_log">暂停</string>
+    <string name="resume_log">继续</string>
+    <string name="export">导出</string>
+
+    <!-- Notifications -->
+    <string name="vpn_channel_name">VPN 服务</string>
+    <string name="vpn_channel_desc">VPN 连接状态</string>
+    <string name="notification_connected">已连接</string>
+    <string name="notification_connecting">连接中…</string>
+</resources>
