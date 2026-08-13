@@ -130,9 +130,12 @@ class MachineController extends Controller
             'server_ip' => 'nullable|string',
             'group_ids' => 'nullable|array',
             'setup_presets' => 'nullable|array',
+            'custom_ports' => 'nullable|array',
+            'reality_keys' => 'nullable|array',
+            'obfs_password' => 'nullable|string',
         ]);
 
-        // 确保 server_token 已设置（xboard-node 调用 server/user 需要）
+        // 确保 server_token 已设置（节点调用 server/user 需要）
         $currentToken = admin_setting('server_token');
         if (empty($currentToken)) {
             \DB::table('v2_settings')->updateOrInsert(
@@ -146,7 +149,7 @@ class MachineController extends Controller
             \Log::info("Auto-set server_token from machine token during autoSetup");
         }
 
-        // 如果提供了服务器 IP，更新机器名称中记录
+        // 如果提供了服务器 IP，更新机器记录
         $serverIp = $request->input('server_ip');
         if ($serverIp) {
             $machine->forceFill(['notes' => ($machine->notes ? $machine->notes . "\n" : '') . 'IP: ' . $serverIp])->saveQuietly();
@@ -160,7 +163,10 @@ class MachineController extends Controller
             $machine->name,
             $serverIp,
             $request->input('group_ids'),
-            $request->input('setup_presets')
+            $request->input('setup_presets'),
+            $request->input('custom_ports'),
+            $request->input('reality_keys'),
+            $request->input('obfs_password'),
         );
 
         // 返回当前机器的全部节点列表

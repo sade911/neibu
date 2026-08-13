@@ -41,6 +41,9 @@ class NodePresetService
      * @param string|null $serverIp 服务器 IP 地址（用于节点 host）
      * @param array|null $groupIds 权限分组 IDs
      * @param array|null $presets 自定义预设选择（null 表示全部 18 种）
+     * @param array|null $customPorts 自定义端口映射 ['preset_key' => port]
+     * @param array|null $realityKeysInput 外部提供的 Reality 密钥 ['private_key', 'public_key', 'short_id']
+     * @param string|null $obfsPasswordInput 外部提供的 OBFS 密码
      * @return int 创建的节点数量
      */
     public static function createPresetNodes(
@@ -49,6 +52,9 @@ class NodePresetService
         ?string $serverIp = null,
         ?array $groupIds = null,
         ?array $presets = null,
+        ?array $customPorts = null,
+        ?array $realityKeysInput = null,
+        ?string $obfsPasswordInput = null,
     ): int {
         // 检查该 Machine 是否已有预设节点（防止重复创建）
         $existingCount = Server::where('machine_id', $machine->id)->count();
@@ -57,12 +63,17 @@ class NodePresetService
             return 0;
         }
 
-        // 生成共享的 Reality 密钥对
-        $realityKeys = self::generateRealityKeyPair();
-        $shortId = bin2hex(random_bytes(4));
+        // Reality 密钥: 优先用外部传入，否则自动生成
+        if ($realityKeysInput && !empty($realityKeysInput['private_key'])) {
+            $realityKeys = $realityKeysInput;
+            $shortId = $realityKeysInput['short_id'] ?? bin2hex(random_bytes(4));
+        } else {
+            $realityKeys = self::generateRealityKeyPair();
+            $shortId = bin2hex(random_bytes(4));
+        }
 
-        // 生成 Hysteria2 OBFS 密码
-        $obfsPassword = bin2hex(random_bytes(8));
+        // OBFS 密码: 优先用外部传入
+        $obfsPassword = $obfsPasswordInput ?: bin2hex(random_bytes(8));
 
         // 构建所有预设定义
         $allPresets = self::buildPresetDefinitions($realityKeys, $shortId, $obfsPassword);
@@ -70,6 +81,16 @@ class NodePresetService
         // 如果指定了子集，则过滤
         if ($presets !== null) {
             $allPresets = array_filter($allPresets, fn($key) => in_array($key, $presets), ARRAY_FILTER_USE_KEY);
+        }
+
+        // 应用自定义端口
+        if ($customPorts !== null) {
+            foreach ($customPorts as $presetKey => $port) {
+                if (isset($allPresets[$presetKey])) {
+                    $allPresets[$presetKey]['port'] = (int) $port;
+                    $allPresets[$presetKey]['server_port'] = (int) $port;
+                }
+            }
         }
 
         $created = 0;

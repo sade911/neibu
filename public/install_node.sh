@@ -1,16 +1,14 @@
 #!/bin/bash
 #
-# Xboard Node 一键部署脚本
-# 功能：安装 xboard-node + 自动在面板创建 18 种预设节点
+# Xboard Node 多后端一键部署脚本
+# 架构: xray-core (VLESS/VMess/Trojan) + sing-box (Hysteria2/TUIC/SS)
+# 端口: 全部随机分配
 #
-# 用法：
+# 用法:
 #   curl -fsSL <panel>/install_node.sh | sudo bash -s -- \
 #     --panel https://your-panel.com \
 #     --token YOUR_MACHINE_TOKEN \
-#     --machine-id 1 \
-#     [--auto-setup]          # 自动创建预设节点（默认开启）
-#     [--no-auto-setup]       # 跳过自动创建节点
-#     [--presets "vless_reality_vision,hysteria2"]  # 只创建指定预设
+#     --machine-id 1
 
 set -euo pipefail
 
@@ -22,7 +20,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # ============================================================
 # 默认值
@@ -30,319 +28,782 @@ NC='\033[0m' # No Color
 PANEL_URL=""
 TOKEN=""
 MACHINE_ID=""
-AUTO_SETUP=true
-PRESETS=""
-INSTALLER_URL="https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh"
+CONFIG_DIR="/etc/xboard-node"
+XRAY_CONFIG="${CONFIG_DIR}/xray.json"
+SINGBOX_CONFIG="${CONFIG_DIR}/singbox.json"
+CERT_DIR="${CONFIG_DIR}/cert"
+SYNC_SCRIPT="${CONFIG_DIR}/sync_users.sh"
+ENV_FILE="${CONFIG_DIR}/.env"
 
 # ============================================================
 # 解析参数
 # ============================================================
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --panel)
-            PANEL_URL="$2"
-            shift 2
-            ;;
-        --token)
-            TOKEN="$2"
-            shift 2
-            ;;
-        --machine-id)
-            MACHINE_ID="$2"
-            shift 2
-            ;;
-        --auto-setup)
-            AUTO_SETUP=true
-            shift
-            ;;
-        --no-auto-setup)
-            AUTO_SETUP=false
-            shift
-            ;;
-        --presets)
-            PRESETS="$2"
-            shift 2
-            ;;
-        --mode)
-            # 兼容原版参数，忽略
-            shift 2
-            ;;
-        *)
-            echo -e "${RED}未知参数: $1${NC}"
-            shift
-            ;;
+        --panel)   PANEL_URL="$2"; shift 2 ;;
+        --token)   TOKEN="$2"; shift 2 ;;
+        --machine-id) MACHINE_ID="$2"; shift 2 ;;
+        *) echo -e "${RED}未知参数: $1${NC}"; shift ;;
     esac
 done
 
-# ============================================================
-# 参数验证
-# ============================================================
-if [[ -z "$PANEL_URL" ]]; then
-    echo -e "${RED}错误: 缺少 --panel 参数${NC}"
-    exit 1
-fi
-
-if [[ -z "$TOKEN" ]]; then
-    echo -e "${RED}错误: 缺少 --token 参数${NC}"
-    exit 1
-fi
-
-if [[ -z "$MACHINE_ID" ]]; then
-    echo -e "${RED}错误: 缺少 --machine-id 参数${NC}"
-    exit 1
-fi
-
-# 移除末尾斜杠
+# 验证
+[[ -z "$PANEL_URL" ]] && { echo -e "${RED}缺少 --panel${NC}"; exit 1; }
+[[ -z "$TOKEN" ]] && { echo -e "${RED}缺少 --token${NC}"; exit 1; }
+[[ -z "$MACHINE_ID" ]] && { echo -e "${RED}缺少 --machine-id${NC}"; exit 1; }
 PANEL_URL="${PANEL_URL%/}"
 
 # ============================================================
-# 获取服务器 IP
+# 工具函数
 # ============================================================
 get_server_ip() {
-    local ip=""
-    # 尝试多种方式获取公网 IP
-    ip=$(curl -s4 --connect-timeout 5 https://api.ipify.org 2>/dev/null) || \
-    ip=$(curl -s4 --connect-timeout 5 https://ifconfig.me 2>/dev/null) || \
-    ip=$(curl -s4 --connect-timeout 5 https://icanhazip.com 2>/dev/null) || \
-    ip=""
-    echo "$ip"
+    curl -s4 --connect-timeout 5 https://api.ipify.org 2>/dev/null || \
+    curl -s4 --connect-timeout 5 https://ifconfig.me 2>/dev/null || \
+    curl -s4 --connect-timeout 5 https://icanhazip.com 2>/dev/null || echo ""
+}
+
+# 生成不重复的随机端口
+generate_random_ports() {
+    local count=$1
+    local ports=()
+    local used_ports
+    used_ports=$(ss -tlnp 2>/dev/null | awk '{print $4}' | grep -oP ':\K[0-9]+$' | sort -u)
+
+    while [[ ${#ports[@]} -lt $count ]]; do
+        local port=$((RANDOM % 50000 + 10000))
+        # 检查是否已使用
+        if ! echo "$used_ports" | grep -qx "$port" && \
+           ! printf '%s\n' "${ports[@]}" 2>/dev/null | grep -qx "$port"; then
+            ports+=("$port")
+        fi
+    done
+    echo "${ports[@]}"
 }
 
 # ============================================================
-# 打印 Banner
+# Banner
 # ============================================================
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║        Xboard Node 一键部署脚本                      ║${NC}"
+echo -e "${CYAN}║   Xboard 多后端节点部署 (xray-core + sing-box)      ║${NC}"
 echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
-echo -e "${CYAN}║  面板地址: ${GREEN}${PANEL_URL}${NC}"
-echo -e "${CYAN}║  机器 ID:  ${GREEN}${MACHINE_ID}${NC}"
-echo -e "${CYAN}║  自动搭建: ${GREEN}${AUTO_SETUP}${NC}"
-if [[ -n "$PRESETS" ]]; then
-echo -e "${CYAN}║  指定预设: ${GREEN}${PRESETS}${NC}"
-fi
+echo -e "${CYAN}║  面板: ${GREEN}${PANEL_URL}${NC}"
+echo -e "${CYAN}║  机器: ${GREEN}${MACHINE_ID}${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# ============================================================
-# Step 1: 安装 xboard-node
-# ============================================================
-echo -e "${BLUE}[1/3] 安装 xboard-node ...${NC}"
-echo ""
-
-curl -fsSL "$INSTALLER_URL" | bash -s -- \
-    --mode machine \
-    --panel "$PANEL_URL" \
-    --token "$TOKEN" \
-    --machine-id "$MACHINE_ID"
-
-echo ""
-echo -e "${GREEN}✓ xboard-node 安装完成${NC}"
-echo ""
+mkdir -p "$CONFIG_DIR" "$CERT_DIR"
 
 # ============================================================
-# Step 1.5: 生成 TLS 证书 + 配置环境变量（Hysteria2/TUIC 需要）
+# Step 1: 检测系统 + 安装依赖
 # ============================================================
-echo -e "${BLUE}[1.5/3] 配置 TLS 证书（Hysteria2/TUIC 协议需要）...${NC}"
+echo -e "${BLUE}[1/10] 安装依赖 ...${NC}"
+if command -v apt-get &>/dev/null; then
+    apt-get update -qq && apt-get install -y -qq curl jq openssl unzip >/dev/null 2>&1
+elif command -v yum &>/dev/null; then
+    yum install -y -q curl jq openssl unzip >/dev/null 2>&1
+fi
+echo -e "  ${GREEN}✓ 依赖就绪${NC}"
 
-CERT_DIR="/etc/xboard-node/cert"
-CERT_FILE_PATH="${CERT_DIR}/fullchain.pem"
-KEY_FILE_PATH="${CERT_DIR}/key.pem"
+# ============================================================
+# Step 2: 安装 xray-core
+# ============================================================
+echo -e "${BLUE}[2/10] 安装 xray-core ...${NC}"
+if ! command -v xray &>/dev/null; then
+    bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>&1 | tail -5
+    echo -e "  ${GREEN}✓ xray-core 安装完成${NC}"
+else
+    echo -e "  ${YELLOW}⚠ xray-core 已存在: $(xray version 2>/dev/null | head -1)${NC}"
+fi
 
-if [[ ! -f "$CERT_FILE_PATH" ]] || [[ ! -f "$KEY_FILE_PATH" ]]; then
-    mkdir -p "$CERT_DIR"
+# ============================================================
+# Step 3: 安装 sing-box
+# ============================================================
+echo -e "${BLUE}[3/10] 安装 sing-box ...${NC}"
+if ! command -v sing-box &>/dev/null; then
+    bash -c "$(curl -fsSL https://sing-box.app/install.sh)" 2>&1 | tail -5
+    echo -e "  ${GREEN}✓ sing-box 安装完成${NC}"
+else
+    echo -e "  ${YELLOW}⚠ sing-box 已存在: $(sing-box version 2>/dev/null | head -1)${NC}"
+fi
+
+# ============================================================
+# Step 4: 生成 TLS 证书 (Hysteria2/TUIC 需要)
+# ============================================================
+echo -e "${BLUE}[4/10] 生成 TLS 证书 ...${NC}"
+CERT_FILE="${CERT_DIR}/fullchain.pem"
+KEY_FILE="${CERT_DIR}/key.pem"
+
+if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
         -days 3650 -nodes \
-        -keyout "$KEY_FILE_PATH" \
-        -out "$CERT_FILE_PATH" \
+        -keyout "$KEY_FILE" -out "$CERT_FILE" \
         -subj "/CN=www.bing.com" 2>/dev/null
     echo -e "  ${GREEN}✓ 自签证书已生成${NC}"
 else
-    echo -e "  ${YELLOW}⚠ 证书已存在，跳过生成${NC}"
+    echo -e "  ${YELLOW}⚠ 证书已存在，跳过${NC}"
 fi
 
-# 配置 systemd 环境变量
-SYSTEMD_DROP_IN="/etc/systemd/system/xboard-node.service.d"
-mkdir -p "$SYSTEMD_DROP_IN"
-cat > "${SYSTEMD_DROP_IN}/cert.conf" << CERTEOF
-[Service]
-Environment="CERT_FILE=${CERT_FILE_PATH}"
-Environment="KEY_FILE=${KEY_FILE_PATH}"
-CERTEOF
+# ============================================================
+# Step 5: 生成 Reality 密钥对
+# ============================================================
+echo -e "${BLUE}[5/10] 生成 Reality 密钥对 ...${NC}"
+REALITY_OUTPUT=$(xray x25519 2>/dev/null)
+REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep 'Private key:' | awk '{print $3}')
+REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep 'Public key:' | awk '{print $3}')
+REALITY_SHORT_ID=$(openssl rand -hex 4)
 
-systemctl daemon-reload
-echo -e "  ${GREEN}✓ systemd 环境变量已配置${NC}"
-echo ""
+echo -e "  Private Key: ${CYAN}${REALITY_PRIVATE_KEY:0:20}...${NC}"
+echo -e "  Public  Key: ${CYAN}${REALITY_PUBLIC_KEY:0:20}...${NC}"
+echo -e "  Short   ID:  ${CYAN}${REALITY_SHORT_ID}${NC}"
 
 # ============================================================
-# Step 1.6: 开放防火墙端口
+# Step 6: 获取服务器 IP + 随机端口
 # ============================================================
-echo -e "${BLUE}[1.6/3] 开放防火墙端口（18 种协议）...${NC}"
+echo -e "${BLUE}[6/10] 分配随机端口 ...${NC}"
 
-# 直连 9 种端口
-DIRECT_PORTS=(443 2053 2083 8080 8388 8389 8443 8444 8446)
-# WARP 9 种端口
-WARP_PORTS=(10443 12053 12083 18080 18388 18389 18443 18444 18446)
-ALL_PORTS=("${DIRECT_PORTS[@]}" "${WARP_PORTS[@]}")
+SERVER_IP=$(get_server_ip)
+echo -e "  服务器 IP: ${GREEN}${SERVER_IP}${NC}"
 
-if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
-    for port in "${ALL_PORTS[@]}"; do
-        ufw allow "$port" >/dev/null 2>&1
+# 生成 18 个随机端口 (9 直连 + 9 WARP)
+ALL_PORTS=($(generate_random_ports 18))
+
+# 直连协议端口分配
+PORT_VLESS_REALITY=${ALL_PORTS[0]}
+PORT_VLESS_GRPC=${ALL_PORTS[1]}
+PORT_TROJAN_REALITY=${ALL_PORTS[2]}
+PORT_VMESS_WS=${ALL_PORTS[3]}
+PORT_HY2=${ALL_PORTS[4]}
+PORT_HY2_OBFS=${ALL_PORTS[5]}
+PORT_SS_2022=${ALL_PORTS[6]}
+PORT_SS_CLASSIC=${ALL_PORTS[7]}
+PORT_TUIC=${ALL_PORTS[8]}
+
+# WARP 协议端口分配
+PORT_VLESS_REALITY_W=${ALL_PORTS[9]}
+PORT_VLESS_GRPC_W=${ALL_PORTS[10]}
+PORT_TROJAN_REALITY_W=${ALL_PORTS[11]}
+PORT_VMESS_WS_W=${ALL_PORTS[12]}
+PORT_HY2_W=${ALL_PORTS[13]}
+PORT_HY2_OBFS_W=${ALL_PORTS[14]}
+PORT_SS_2022_W=${ALL_PORTS[15]}
+PORT_SS_CLASSIC_W=${ALL_PORTS[16]}
+PORT_TUIC_W=${ALL_PORTS[17]}
+
+# 生成 Hysteria2 OBFS 密码
+OBFS_PASSWORD=$(openssl rand -hex 8)
+
+echo -e "  ${CYAN}xray-core 端口:${NC}"
+echo -e "    VLESS Reality:  ${GREEN}${PORT_VLESS_REALITY}${NC} / WARP: ${GREEN}${PORT_VLESS_REALITY_W}${NC}"
+echo -e "    VLESS gRPC:     ${GREEN}${PORT_VLESS_GRPC}${NC} / WARP: ${GREEN}${PORT_VLESS_GRPC_W}${NC}"
+echo -e "    Trojan Reality: ${GREEN}${PORT_TROJAN_REALITY}${NC} / WARP: ${GREEN}${PORT_TROJAN_REALITY_W}${NC}"
+echo -e "    VMess WS:       ${GREEN}${PORT_VMESS_WS}${NC} / WARP: ${GREEN}${PORT_VMESS_WS_W}${NC}"
+echo -e "  ${CYAN}sing-box 端口:${NC}"
+echo -e "    Hysteria2:      ${GREEN}${PORT_HY2}${NC} / WARP: ${GREEN}${PORT_HY2_W}${NC}"
+echo -e "    Hy2 OBFS:       ${GREEN}${PORT_HY2_OBFS}${NC} / WARP: ${GREEN}${PORT_HY2_OBFS_W}${NC}"
+echo -e "    SS 2022:        ${GREEN}${PORT_SS_2022}${NC} / WARP: ${GREEN}${PORT_SS_2022_W}${NC}"
+echo -e "    SS Classic:     ${GREEN}${PORT_SS_CLASSIC}${NC} / WARP: ${GREEN}${PORT_SS_CLASSIC_W}${NC}"
+echo -e "    TUIC v5:        ${GREEN}${PORT_TUIC}${NC} / WARP: ${GREEN}${PORT_TUIC_W}${NC}"
+
+# ============================================================
+# Step 7: 生成 xray-core 配置
+# ============================================================
+echo -e "${BLUE}[7/10] 生成 xray-core 配置 ...${NC}"
+
+cat > "$XRAY_CONFIG" << XRAYEOF
+{
+  "log": {"loglevel": "warning"},
+  "api": {
+    "tag": "api",
+    "services": ["HandlerService", "StatsService"]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {"0": {"statsUserUplink": true, "statsUserDownlink": true}},
+    "system": {"statsInboundUplink": true, "statsInboundDownlink": true}
+  },
+  "inbounds": [
+    {
+      "tag": "vless-reality-vision",
+      "listen": "0.0.0.0",
+      "port": ${PORT_VLESS_REALITY},
+      "protocol": "vless",
+      "settings": {"clients": [], "decryption": "none"},
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_SHORT_ID}"]
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "vless-reality-grpc",
+      "listen": "0.0.0.0",
+      "port": ${PORT_VLESS_GRPC},
+      "protocol": "vless",
+      "settings": {"clients": [], "decryption": "none"},
+      "streamSettings": {
+        "network": "grpc",
+        "grpcSettings": {"serviceName": "grpc"},
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_SHORT_ID}"]
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "trojan-reality",
+      "listen": "0.0.0.0",
+      "port": ${PORT_TROJAN_REALITY},
+      "protocol": "trojan",
+      "settings": {"clients": []},
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_SHORT_ID}"]
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "vmess-ws",
+      "listen": "0.0.0.0",
+      "port": ${PORT_VMESS_WS},
+      "protocol": "vmess",
+      "settings": {"clients": []},
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {"path": "/ws"}
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "vless-reality-vision-warp",
+      "listen": "0.0.0.0",
+      "port": ${PORT_VLESS_REALITY_W},
+      "protocol": "vless",
+      "settings": {"clients": [], "decryption": "none"},
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_SHORT_ID}"]
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "vless-reality-grpc-warp",
+      "listen": "0.0.0.0",
+      "port": ${PORT_VLESS_GRPC_W},
+      "protocol": "vless",
+      "settings": {"clients": [], "decryption": "none"},
+      "streamSettings": {
+        "network": "grpc",
+        "grpcSettings": {"serviceName": "grpc"},
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_SHORT_ID}"]
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "trojan-reality-warp",
+      "listen": "0.0.0.0",
+      "port": ${PORT_TROJAN_REALITY_W},
+      "protocol": "trojan",
+      "settings": {"clients": []},
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "${REALITY_PRIVATE_KEY}",
+          "shortIds": ["${REALITY_SHORT_ID}"]
+        }
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    },
+    {
+      "tag": "vmess-ws-warp",
+      "listen": "0.0.0.0",
+      "port": ${PORT_VMESS_WS_W},
+      "protocol": "vmess",
+      "settings": {"clients": []},
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {"path": "/ws"}
+      },
+      "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+    }
+  ],
+  "outbounds": [
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "block", "protocol": "blackhole"}
+  ],
+  "routing": {
+    "rules": [
+      {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}
+    ]
+  }
+}
+XRAYEOF
+
+echo -e "  ${GREEN}✓ xray-core 配置: ${XRAY_CONFIG}${NC}"
+
+# ============================================================
+# Step 8: 生成 sing-box 配置
+# ============================================================
+echo -e "${BLUE}[8/10] 生成 sing-box 配置 ...${NC}"
+
+cat > "$SINGBOX_CONFIG" << SBEOF
+{
+  "log": {"level": "warn"},
+  "inbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "hy2-direct",
+      "listen": "::",
+      "listen_port": ${PORT_HY2},
+      "users": [],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "${CERT_FILE}",
+        "key_path": "${KEY_FILE}"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hy2-obfs-direct",
+      "listen": "::",
+      "listen_port": ${PORT_HY2_OBFS},
+      "users": [],
+      "obfs": {
+        "type": "salamander",
+        "password": "${OBFS_PASSWORD}"
+      },
+      "tls": {
+        "enabled": true,
+        "certificate_path": "${CERT_FILE}",
+        "key_path": "${KEY_FILE}"
+      }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-2022-direct",
+      "listen": "::",
+      "listen_port": ${PORT_SS_2022},
+      "method": "2022-blake3-aes-256-gcm",
+      "password": "PLACEHOLDER_SERVER_KEY",
+      "users": []
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-classic-direct",
+      "listen": "::",
+      "listen_port": ${PORT_SS_CLASSIC},
+      "method": "aes-256-gcm",
+      "password": "PLACEHOLDER_PASS",
+      "users": []
+    },
+    {
+      "type": "tuic",
+      "tag": "tuic-direct",
+      "listen": "::",
+      "listen_port": ${PORT_TUIC},
+      "users": [],
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "alpn": ["h3"],
+        "certificate_path": "${CERT_FILE}",
+        "key_path": "${KEY_FILE}"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hy2-warp",
+      "listen": "::",
+      "listen_port": ${PORT_HY2_W},
+      "users": [],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "${CERT_FILE}",
+        "key_path": "${KEY_FILE}"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hy2-obfs-warp",
+      "listen": "::",
+      "listen_port": ${PORT_HY2_OBFS_W},
+      "users": [],
+      "obfs": {
+        "type": "salamander",
+        "password": "${OBFS_PASSWORD}"
+      },
+      "tls": {
+        "enabled": true,
+        "certificate_path": "${CERT_FILE}",
+        "key_path": "${KEY_FILE}"
+      }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-2022-warp",
+      "listen": "::",
+      "listen_port": ${PORT_SS_2022_W},
+      "method": "2022-blake3-aes-256-gcm",
+      "password": "PLACEHOLDER_SERVER_KEY",
+      "users": []
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss-classic-warp",
+      "listen": "::",
+      "listen_port": ${PORT_SS_CLASSIC_W},
+      "method": "aes-256-gcm",
+      "password": "PLACEHOLDER_PASS",
+      "users": []
+    },
+    {
+      "type": "tuic",
+      "tag": "tuic-warp",
+      "listen": "::",
+      "listen_port": ${PORT_TUIC_W},
+      "users": [],
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "alpn": ["h3"],
+        "certificate_path": "${CERT_FILE}",
+        "key_path": "${KEY_FILE}"
+      }
+    }
+  ],
+  "outbounds": [
+    {"type": "direct", "tag": "direct"},
+    {"type": "block", "tag": "block"}
+  ]
+}
+SBEOF
+
+echo -e "  ${GREEN}✓ sing-box 配置: ${SINGBOX_CONFIG}${NC}"
+
+# ============================================================
+# Step 9: 调用面板 API 创建节点
+# ============================================================
+echo -e "${BLUE}[9/10] 注册节点到面板 ...${NC}"
+
+# 构建 JSON body，传入随机端口 + Reality 密钥
+SETUP_BODY=$(cat << JSONEOF
+{
+  "machine_id": ${MACHINE_ID},
+  "token": "${TOKEN}",
+  "server_ip": "${SERVER_IP}",
+  "custom_ports": {
+    "vless_reality_vision": ${PORT_VLESS_REALITY},
+    "vless_grpc_reality": ${PORT_VLESS_GRPC},
+    "trojan_reality": ${PORT_TROJAN_REALITY},
+    "vmess_ws": ${PORT_VMESS_WS},
+    "hysteria2": ${PORT_HY2},
+    "hysteria2_obfs": ${PORT_HY2_OBFS},
+    "ss_2022": ${PORT_SS_2022},
+    "ss_classic": ${PORT_SS_CLASSIC},
+    "tuic_v5": ${PORT_TUIC},
+    "vless_reality_vision_warp": ${PORT_VLESS_REALITY_W},
+    "vless_grpc_reality_warp": ${PORT_VLESS_GRPC_W},
+    "trojan_reality_warp": ${PORT_TROJAN_REALITY_W},
+    "vmess_ws_warp": ${PORT_VMESS_WS_W},
+    "hysteria2_warp": ${PORT_HY2_W},
+    "hysteria2_obfs_warp": ${PORT_HY2_OBFS_W},
+    "ss_2022_warp": ${PORT_SS_2022_W},
+    "ss_classic_warp": ${PORT_SS_CLASSIC_W},
+    "tuic_v5_warp": ${PORT_TUIC_W}
+  },
+  "reality_keys": {
+    "private_key": "${REALITY_PRIVATE_KEY}",
+    "public_key": "${REALITY_PUBLIC_KEY}",
+    "short_id": "${REALITY_SHORT_ID}"
+  },
+  "obfs_password": "${OBFS_PASSWORD}"
+}
+JSONEOF
+)
+
+SETUP_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/autoSetup" \
+    -H "Content-Type: application/json" \
+    -d "$SETUP_BODY" 2>/dev/null) || SETUP_RESPONSE=""
+
+if [[ -n "$SETUP_RESPONSE" ]]; then
+    NODES_CREATED=$(echo "$SETUP_RESPONSE" | jq -r '.data.nodes_created // 0')
+    TOTAL_NODES=$(echo "$SETUP_RESPONSE" | jq -r '.data.total_nodes // 0')
+    echo -e "  ${GREEN}✓ 创建 ${NODES_CREATED} 个节点，共 ${TOTAL_NODES} 个${NC}"
+else
+    echo -e "  ${RED}✗ API 调用失败${NC}"
+fi
+
+# 保存环境变量
+cat > "$ENV_FILE" << ENVEOF
+PANEL_URL=${PANEL_URL}
+TOKEN=${TOKEN}
+MACHINE_ID=${MACHINE_ID}
+SERVER_IP=${SERVER_IP}
+REALITY_PRIVATE_KEY=${REALITY_PRIVATE_KEY}
+REALITY_PUBLIC_KEY=${REALITY_PUBLIC_KEY}
+REALITY_SHORT_ID=${REALITY_SHORT_ID}
+OBFS_PASSWORD=${OBFS_PASSWORD}
+ENVEOF
+chmod 600 "$ENV_FILE"
+
+# ============================================================
+# Step 9.5: 创建用户同步脚本
+# ============================================================
+echo -e "${BLUE}[9.5/10] 创建用户同步脚本 ...${NC}"
+
+cat > "$SYNC_SCRIPT" << 'SYNCEOF'
+#!/bin/bash
+# 用户同步脚本 — 从面板拉取用户并更新 xray/sing-box 配置
+set -euo pipefail
+
+CONFIG_DIR="/etc/xboard-node"
+source "${CONFIG_DIR}/.env"
+
+XRAY_CONFIG="${CONFIG_DIR}/xray.json"
+SINGBOX_CONFIG="${CONFIG_DIR}/singbox.json"
+
+# 获取面板节点列表 (通过 machine nodes API)
+NODES_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/nodes" \
+    -H "Content-Type: application/json" \
+    -d "{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\"}" 2>/dev/null)
+
+if [[ -z "$NODES_RESPONSE" ]]; then
+    echo "[$(date)] 无法连接面板" >&2
+    exit 1
+fi
+
+# 对每个节点拉取用户
+NODE_IDS=$(echo "$NODES_RESPONSE" | jq -r '.data[]?.id // empty' 2>/dev/null)
+ALL_UUIDS=()
+
+for NODE_ID in $NODE_IDS; do
+    USERS_RESPONSE=$(curl -s "${PANEL_URL}/api/v2/server/user?token=${TOKEN}&node_id=${NODE_ID}" 2>/dev/null)
+    UUIDS=$(echo "$USERS_RESPONSE" | jq -r '.users[]?.uuid // empty' 2>/dev/null)
+    for UUID in $UUIDS; do
+        if [[ -n "$UUID" ]] && ! printf '%s\n' "${ALL_UUIDS[@]}" 2>/dev/null | grep -qx "$UUID"; then
+            ALL_UUIDS+=("$UUID")
+        fi
     done
-    echo -e "  ${GREEN}✓ ufw 已开放 ${#ALL_PORTS[@]} 个端口${NC}"
-elif command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
-    for port in "${ALL_PORTS[@]}"; do
+    break  # 所有节点的用户列表相同（同 machine 同 group），只需取一次
+done
+
+if [[ ${#ALL_UUIDS[@]} -eq 0 ]]; then
+    echo "[$(date)] 未获取到用户" >&2
+    exit 0
+fi
+
+echo "[$(date)] 同步 ${#ALL_UUIDS[@]} 个用户"
+
+# 构建 xray clients JSON
+XRAY_CLIENTS="["
+TROJAN_CLIENTS="["
+for i in "${!ALL_UUIDS[@]}"; do
+    UUID="${ALL_UUIDS[$i]}"
+    [[ $i -gt 0 ]] && XRAY_CLIENTS+="," && TROJAN_CLIENTS+=","
+    XRAY_CLIENTS+="{\"id\":\"${UUID}\",\"flow\":\"xtls-rsa-vision\",\"level\":0}"
+    TROJAN_CLIENTS+="{\"password\":\"${UUID}\",\"level\":0}"
+done
+XRAY_CLIENTS+="]"
+TROJAN_CLIENTS+="]"
+
+# 无 flow 版本 (gRPC/WS 不需要 flow)
+XRAY_CLIENTS_NOFLOW="["
+for i in "${!ALL_UUIDS[@]}"; do
+    UUID="${ALL_UUIDS[$i]}"
+    [[ $i -gt 0 ]] && XRAY_CLIENTS_NOFLOW+=","
+    XRAY_CLIENTS_NOFLOW+="{\"id\":\"${UUID}\",\"level\":0}"
+done
+XRAY_CLIENTS_NOFLOW+="]"
+
+# 更新 xray 配置中的 clients
+XRAY_TMP=$(mktemp)
+jq --argjson vless_clients "$XRAY_CLIENTS" \
+   --argjson vless_noflow "$XRAY_CLIENTS_NOFLOW" \
+   --argjson trojan_clients "$TROJAN_CLIENTS" \
+   --argjson vmess_clients "$XRAY_CLIENTS_NOFLOW" \
+   '
+   .inbounds |= map(
+     if (.tag | test("vless.*vision")) then .settings.clients = $vless_clients
+     elif (.tag | test("vless.*grpc")) then .settings.clients = $vless_noflow
+     elif (.tag | test("trojan")) then .settings.clients = $trojan_clients
+     elif (.tag | test("vmess")) then .settings.clients = $vmess_clients
+     else .
+     end
+   )
+   ' "$XRAY_CONFIG" > "$XRAY_TMP"
+
+if jq empty "$XRAY_TMP" 2>/dev/null; then
+    mv "$XRAY_TMP" "$XRAY_CONFIG"
+    # 热重载 xray
+    killall -SIGHUP xray 2>/dev/null || systemctl restart xray 2>/dev/null || true
+else
+    rm -f "$XRAY_TMP"
+    echo "[$(date)] xray 配置生成失败" >&2
+fi
+
+# 构建 sing-box users JSON
+SB_HY2_USERS="["
+SB_TUIC_USERS="["
+SB_SS_USERS="["
+for i in "${!ALL_UUIDS[@]}"; do
+    UUID="${ALL_UUIDS[$i]}"
+    [[ $i -gt 0 ]] && SB_HY2_USERS+="," && SB_TUIC_USERS+="," && SB_SS_USERS+=","
+    SB_HY2_USERS+="{\"name\":\"user_${i}\",\"password\":\"${UUID}\"}"
+    SB_TUIC_USERS+="{\"name\":\"user_${i}\",\"uuid\":\"${UUID}\",\"password\":\"${UUID}\"}"
+    SB_SS_USERS+="{\"name\":\"user_${i}\",\"password\":\"${UUID}\"}"
+done
+SB_HY2_USERS+="]"
+SB_TUIC_USERS+="]"
+SB_SS_USERS+="]"
+
+# 更新 sing-box 配置
+SB_TMP=$(mktemp)
+jq --argjson hy2_users "$SB_HY2_USERS" \
+   --argjson tuic_users "$SB_TUIC_USERS" \
+   --argjson ss_users "$SB_SS_USERS" \
+   '
+   .inbounds |= map(
+     if (.type == "hysteria2") then .users = $hy2_users
+     elif (.type == "tuic") then .users = $tuic_users
+     elif (.type == "shadowsocks" and (.method == "aes-256-gcm")) then .users = $ss_users
+     elif (.type == "shadowsocks") then .users = $ss_users
+     else .
+     end
+   )
+   ' "$SINGBOX_CONFIG" > "$SB_TMP"
+
+if jq empty "$SB_TMP" 2>/dev/null; then
+    mv "$SB_TMP" "$SINGBOX_CONFIG"
+    # 热重载 sing-box
+    killall -SIGUSR1 sing-box 2>/dev/null || systemctl restart sing-box 2>/dev/null || true
+else
+    rm -f "$SB_TMP"
+    echo "[$(date)] sing-box 配置生成失败" >&2
+fi
+SYNCEOF
+
+chmod +x "$SYNC_SCRIPT"
+echo -e "  ${GREEN}✓ 同步脚本: ${SYNC_SCRIPT}${NC}"
+
+# 设置 cron (每 60 秒同步)
+CRON_LINE="* * * * * ${SYNC_SCRIPT} >> /var/log/xboard-sync.log 2>&1"
+(crontab -l 2>/dev/null | grep -v 'sync_users.sh'; echo "$CRON_LINE") | crontab -
+echo -e "  ${GREEN}✓ Cron 已设置 (每分钟同步)${NC}"
+
+# ============================================================
+# Step 10: 防火墙 + systemd + 启动
+# ============================================================
+echo -e "${BLUE}[10/10] 防火墙 + 启动服务 ...${NC}"
+
+# 防火墙
+for port in "${ALL_PORTS[@]}"; do
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
+        ufw allow "$port" >/dev/null 2>&1
+    elif command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
         firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
         firewall-cmd --permanent --add-port="${port}/udp" >/dev/null 2>&1
-    done
-    firewall-cmd --reload >/dev/null 2>&1
-    echo -e "  ${GREEN}✓ firewalld 已开放 ${#ALL_PORTS[@]} 个端口${NC}"
-elif command -v iptables &>/dev/null; then
-    for port in "${ALL_PORTS[@]}"; do
+    else
         iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
             iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
         iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || \
             iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
-    done
-    # 持久化 iptables（如果有 iptables-save）
-    if command -v iptables-save &>/dev/null; then
-        iptables-save > /etc/iptables.rules 2>/dev/null || true
     fi
-    echo -e "  ${GREEN}✓ iptables 已开放 ${#ALL_PORTS[@]} 个端口${NC}"
-else
-    echo -e "  ${YELLOW}⚠ 未检测到防火墙，请手动确认端口已开放${NC}"
-fi
+done
+command -v firewall-cmd &>/dev/null && firewall-cmd --reload >/dev/null 2>&1 || true
+echo -e "  ${GREEN}✓ 防火墙已开放 ${#ALL_PORTS[@]} 个端口${NC}"
 
-echo -e "  ${CYAN}直连端口: ${DIRECT_PORTS[*]}${NC}"
-echo -e "  ${CYAN}WARP端口: ${WARP_PORTS[*]}${NC}"
-echo ""
-# ============================================================
-# Step 2: 获取服务器信息
-# ============================================================
-echo -e "${BLUE}[2/3] 检测服务器信息 ...${NC}"
+# xray systemd override
+mkdir -p /etc/systemd/system/xray.service.d
+cat > /etc/systemd/system/xray.service.d/override.conf << XSEOF
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/xray run -config ${XRAY_CONFIG}
+XSEOF
 
-SERVER_IP=$(get_server_ip)
-if [[ -n "$SERVER_IP" ]]; then
-    echo -e "  服务器 IP: ${GREEN}${SERVER_IP}${NC}"
-else
-    echo -e "  ${YELLOW}无法获取公网 IP，跳过 IP 记录${NC}"
-fi
+# sing-box systemd
+cat > /etc/systemd/system/xboard-singbox.service << SBSEOF
+[Unit]
+Description=Xboard Sing-Box Service
+After=network.target
 
-# 检测当前 Machine 已有的节点数
-echo -e "  正在查询面板已有节点 ..."
-EXISTING_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/nodes" \
-    -H "Content-Type: application/json" \
-    -d "{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\"}" \
-    2>/dev/null) || EXISTING_RESPONSE=""
+[Service]
+Type=simple
+ExecStart=$(command -v sing-box) run -c ${SINGBOX_CONFIG}
+Restart=always
+RestartSec=5
 
-if [[ -n "$EXISTING_RESPONSE" ]]; then
-    EXISTING_COUNT=$(echo "$EXISTING_RESPONSE" | grep -o '"id"' | wc -l 2>/dev/null || echo "0")
-    echo -e "  当前已有节点: ${YELLOW}${EXISTING_COUNT} 个${NC}"
-else
-    EXISTING_COUNT=0
-    echo -e "  ${YELLOW}无法查询已有节点信息${NC}"
-fi
+[Install]
+WantedBy=multi-user.target
+SBSEOF
 
-echo ""
+systemctl daemon-reload
 
-# ============================================================
-# Step 3: 自动创建预设节点
-# ============================================================
-if [[ "$AUTO_SETUP" == "true" ]]; then
-    echo -e "${BLUE}[3/3] 自动创建预设节点（9 直连 + 9 WARP = 18 种）...${NC}"
-    echo ""
+# 先运行一次用户同步
+echo -e "  正在同步用户 ..."
+"$SYNC_SCRIPT" 2>/dev/null || echo -e "  ${YELLOW}⚠ 首次同步失败（可能还没有用户）${NC}"
 
-    # 构建请求 body
-    SETUP_BODY="{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\""
+# 启动服务
+systemctl enable xray 2>/dev/null || true
+systemctl restart xray
+systemctl enable xboard-singbox
+systemctl restart xboard-singbox
 
-    if [[ -n "$SERVER_IP" ]]; then
-        SETUP_BODY="${SETUP_BODY}, \"server_ip\": \"${SERVER_IP}\""
-    fi
+sleep 2
 
-    if [[ -n "$PRESETS" ]]; then
-        # 将逗号分隔的预设转换为 JSON 数组
-        PRESETS_JSON=$(echo "$PRESETS" | sed 's/,/","/g')
-        SETUP_BODY="${SETUP_BODY}, \"setup_presets\": [\"${PRESETS_JSON}\"]"
-    fi
-
-    SETUP_BODY="${SETUP_BODY}}"
-
-    # 调用面板 autoSetup API
-    SETUP_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/autoSetup" \
-        -H "Content-Type: application/json" \
-        -d "$SETUP_BODY" \
-        2>/dev/null) || SETUP_RESPONSE=""
-
-    if [[ -n "$SETUP_RESPONSE" ]]; then
-        # 解析返回结果
-        NODES_CREATED=$(echo "$SETUP_RESPONSE" | grep -o '"nodes_created":[0-9]*' | grep -o '[0-9]*' 2>/dev/null || echo "0")
-        TOTAL_NODES=$(echo "$SETUP_RESPONSE" | grep -o '"total_nodes":[0-9]*' | grep -o '[0-9]*' 2>/dev/null || echo "0")
-
-        if [[ "$NODES_CREATED" -gt 0 ]]; then
-            echo -e "  ${GREEN}✓ 成功创建 ${NODES_CREATED} 个预设节点${NC}"
-            echo -e "  ${GREEN}  当前机器共有 ${TOTAL_NODES} 个节点${NC}"
-            echo ""
-            echo -e "  ${CYAN}节点列表：${NC}"
-            echo -e "  ┌──────────────────────────────────────────────┐"
-            echo -e "  │ ${YELLOW}直连节点 (9 种)${NC}                                │"
-            echo -e "  │  VLESS Reality (Vision)     端口: 443        │"
-            echo -e "  │  VLESS gRPC Reality         端口: 2053       │"
-            echo -e "  │  Trojan Reality             端口: 2083       │"
-            echo -e "  │  VMess WS                   端口: 8080       │"
-            echo -e "  │  Hysteria2                  端口: 8443       │"
-            echo -e "  │  Hysteria2 + OBFS           端口: 8444       │"
-            echo -e "  │  SS 2022                    端口: 8388       │"
-            echo -e "  │  SS Classic                 端口: 8389       │"
-            echo -e "  │  TUIC v5                    端口: 8446       │"
-            echo -e "  │                                              │"
-            echo -e "  │ ${YELLOW}WARP 节点 (9 种)${NC}                               │"
-            echo -e "  │  VLESS Reality [WARP]       端口: 10443      │"
-            echo -e "  │  VLESS gRPC Reality [WARP]  端口: 12053      │"
-            echo -e "  │  Trojan Reality [WARP]      端口: 12083      │"
-            echo -e "  │  VMess WS [WARP]            端口: 18080      │"
-            echo -e "  │  Hysteria2 [WARP]           端口: 18443      │"
-            echo -e "  │  Hysteria2 OBFS [WARP]      端口: 18444      │"
-            echo -e "  │  SS 2022 [WARP]             端口: 18388      │"
-            echo -e "  │  SS Classic [WARP]          端口: 18389      │"
-            echo -e "  │  TUIC v5 [WARP]             端口: 18446      │"
-            echo -e "  └──────────────────────────────────────────────┘"
-        elif [[ "$NODES_CREATED" == "0" ]] && [[ "$TOTAL_NODES" -gt 0 ]]; then
-            echo -e "  ${YELLOW}⚠ 该机器已有 ${TOTAL_NODES} 个节点，跳过重复创建${NC}"
-        else
-            echo -e "  ${RED}✗ 节点创建失败，请检查面板日志${NC}"
-            echo -e "  ${RED}  响应: ${SETUP_RESPONSE}${NC}"
-        fi
-    else
-        echo -e "  ${RED}✗ 无法连接面板 API，请检查网络和面板地址${NC}"
-    fi
-else
-    echo -e "${BLUE}[3/3] 跳过自动创建节点（使用 --auto-setup 开启）${NC}"
-fi
-
-# ============================================================
-# 完成：重启 xboard-node 使证书配置生效
-# ============================================================
-echo ""
-echo -e "${BLUE}重启 xboard-node 使配置生效...${NC}"
-systemctl restart xboard-node
-sleep 3
-
-# 检查运行状态
-if systemctl is-active --quiet xboard-node; then
-    echo -e "${GREEN}✓ xboard-node 运行正常${NC}"
-else
-    echo -e "${RED}✗ xboard-node 启动异常，请检查日志: journalctl -u xboard-node${NC}"
-fi
+# 检查状态
+XRAY_OK=false
+SB_OK=false
+systemctl is-active --quiet xray && XRAY_OK=true
+systemctl is-active --quiet xboard-singbox && SB_OK=true
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║                    部署完成！                         ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════╣${NC}"
+if $XRAY_OK; then
+    echo -e "${GREEN}║  xray-core:   ✓ 运行中                              ║${NC}"
+else
+    echo -e "${RED}║  xray-core:   ✗ 异常 (journalctl -u xray)            ║${NC}"
+fi
+if $SB_OK; then
+    echo -e "${GREEN}║  sing-box:    ✓ 运行中                              ║${NC}"
+else
+    echo -e "${RED}║  sing-box:    ✗ 异常 (journalctl -u xboard-singbox)  ║${NC}"
+fi
 echo -e "${GREEN}║                                                      ║${NC}"
-echo -e "${GREEN}║  1. 登录面板管理后台查看节点列表                       ║${NC}"
-echo -e "${GREEN}║  2. WARP 节点需手动配置 WireGuard 密钥                ║${NC}"
-echo -e "${GREEN}║  3. 确认无误后将节点 show 设为可见                     ║${NC}"
-echo -e "${GREEN}║  4. 查看日志: journalctl -u xboard-node -f            ║${NC}"
-echo -e "${GREEN}║                                                      ║${NC}"
+echo -e "${GREEN}║  配置目录: ${CONFIG_DIR}                     ║${NC}"
+echo -e "${GREEN}║  用户同步: 每分钟自动拉取                             ║${NC}"
+echo -e "${GREEN}║  日志: /var/log/xboard-sync.log                      ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
