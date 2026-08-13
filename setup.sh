@@ -889,12 +889,6 @@ deploy_xboard() {
     mkdir -p "${SITE_DIR}"
     cd "${SITE_DIR}"
 
-    # 清理默认文件
-    if [[ -f ".user.ini" ]]; then
-        chattr -i .user.ini 2>/dev/null || true
-    fi
-    rm -rf .htaccess 404.html 502.html index.html .user.ini 2>/dev/null || true
-
     # 解决 git 目录所有权问题 (root 运行但目录属主是 www)
     git config --global --add safe.directory '*' 2>/dev/null || true
 
@@ -905,8 +899,42 @@ deploy_xboard() {
         git reset --hard origin/master 2>&1
         git pull origin master 2>&1
     else
+        # 目录可能有残留文件 (上次安装失败或宝塔默认文件)
+        # 备份已有的 .env 配置
+        local env_backup=""
+        if [[ -f ".env" ]]; then
+            env_backup="/tmp/xboard_env_backup_$(date +%s)"
+            cp .env "$env_backup"
+            log_info "已备份 .env 到 ${env_backup}"
+        fi
+
+        # 清理目录中的所有文件
+        log_info "清理站点目录残留文件 ..."
+        if [[ -f ".user.ini" ]]; then
+            chattr -i .user.ini 2>/dev/null || true
+        fi
+        rm -rf "${SITE_DIR:?}"/* "${SITE_DIR}"/.[!.]* 2>/dev/null || true
+
         log_info "克隆仓库: ${GIT_REPO} ..."
         git clone "${GIT_REPO}" ./ 2>&1
+
+        # 恢复 .env
+        if [[ -n "$env_backup" && -f "$env_backup" ]]; then
+            cp "$env_backup" .env
+            log_info "已恢复 .env 配置"
+        fi
+    fi
+
+    # 验证代码是否存在
+    if [[ ! -f "composer.json" ]]; then
+        log_error "代码克隆失败！composer.json 不存在"
+        log_error "请检查网络或手动克隆:"
+        log_error "  cd ${SITE_DIR} && git clone ${GIT_REPO} ./"
+        read -rp "$(echo -e "${YELLOW}修复完成后按 Enter 继续 ...${NC}")"
+        if [[ ! -f "composer.json" ]]; then
+            log_error "composer.json 仍不存在，脚本无法继续"
+            exit 1
+        fi
     fi
 
     # 安装 Composer 依赖
