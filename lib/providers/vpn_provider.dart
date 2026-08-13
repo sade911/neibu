@@ -36,6 +36,8 @@ class VpnProvider extends ChangeNotifier {
   String get panelUrl => _panelUrl;
   double get uploadSpeedKb => _uploadSpeedKb;
   double get downloadSpeedKb => _downloadSpeedKb;
+  int get uploadBytes => (_uploadSpeedKb * 1024).toInt();
+  int get downloadBytes => (_downloadSpeedKb * 1024).toInt();
 
   VpnProvider() {
     _init();
@@ -153,12 +155,23 @@ class VpnProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Build Xray config
-      final config = XrayConfigBuilder.buildConfig(
-        node: _selectedNode!,
-        uuid: _currentUuid!,
+      // Build Xray config from node model
+      final clashProxy = <String, dynamic>{
+        'type': _selectedNode!.type,
+        'server': _selectedNode!.host,
+        'port': _selectedNode!.serverPort,
+        'uuid': _currentUuid!,
+        'password': _currentUuid!,
+        ..._selectedNode!.rawConfig.containsKey('protocol_settings')
+            ? (_selectedNode!.rawConfig['protocol_settings'] as Map<String, dynamic>? ?? {})
+            : {},
+      };
+      final config = XrayConfigBuilder.generateDesktopConfig(
+        clashProxy: clashProxy,
+        routingMode: 'rule',
         httpPort: _httpPort,
         socksPort: _socksPort,
+        statsPort: 10085,
       );
 
       // Write config
