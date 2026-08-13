@@ -65,6 +65,7 @@ echo ""
 echo -e "${CYAN}=======================================================${NC}"
 echo -e "${CYAN}  Xboard Node Deployment v4${NC}"
 echo -e "${CYAN}  xboard-node (xray+SS) + hysteria2 + tuic${NC}"
+echo -e "${CYAN}  11 steps | auto user sync${NC}"
 echo -e "${CYAN}=======================================================${NC}"
 echo ""
 
@@ -300,9 +301,89 @@ else
 fi
 
 # ============================================================
-# [9/9] Firewall + systemd + start services
+# [9/11] User sync for hy2 + tuic (xboard-node syncs xray+SS)
 # ============================================================
-echo -e "${BLUE}[9/9] Starting services ...${NC}"
+echo -e "${BLUE}[9/11] Creating user sync script ...${NC}"
+
+cat > "${CONFIG_DIR}/sync_users.sh" << 'SYNCEOF'
+#!/bin/bash
+CONFIG_DIR="/etc/xboard-node"
+source "${CONFIG_DIR}/.env" 2>/dev/null || exit 1
+
+# Fetch users from panel
+NODES_RESP=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/nodes" \
+    -H "Content-Type: application/json" \
+    -d "{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\"}" 2>/dev/null)
+NODE_ID=$(echo "$NODES_RESP" | jq -r '.data[0].id // empty' 2>/dev/null)
+[[ -z "$NODE_ID" ]] && exit 1
+
+USERS_RESP=$(curl -s "${PANEL_URL}/api/v2/server/user?token=${TOKEN}&node_id=${NODE_ID}" 2>/dev/null)
+UUIDS=($(echo "$USERS_RESP" | jq -r '.users[]?.uuid // empty' 2>/dev/null | sort -u))
+[[ ${#UUIDS[@]} -eq 0 ]] && exit 0
+
+# Update Hysteria2 configs
+for CFG in hy2.yaml hy2-obfs.yaml hy2-warp.yaml hy2-obfs-warp.yaml; do
+    F="${CONFIG_DIR}/${CFG}"
+    [[ -f "$F" ]] || continue
+    # Rebuild userpass section
+    USERPASS=""
+    for U in "${UUIDS[@]}"; do
+        USERPASS+="    ${U}: ${U}\n"
+    done
+    # Replace everything between "userpass:" and "masquerade:" (or end of auth block)
+    python3 -c "
+import re
+data = open('$F').read()
+data = re.sub(r'(  userpass:\n).*?(\nmasquerade:)', r'\1${USERPASS}\2', data, flags=re.DOTALL)
+open('$F', 'w').write(data)
+" 2>/dev/null || {
+        # Fallback: sed approach
+        sed -i '/^  userpass:/,/^masquerade:/{/^  userpass:/!{/^masquerade:/!d}}' "$F"
+        sed -i "s|^  userpass:|  userpass:\n${USERPASS}|" "$F"
+    }
+done
+# Reload hy2 (SIGHUP or restart)
+for SVC in hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp; do
+    systemctl restart "$SVC" 2>/dev/null || true
+done
+
+# Update TUIC configs
+for CFG in tuic.json tuic-warp.json; do
+    F="${CONFIG_DIR}/${CFG}"
+    [[ -f "$F" ]] || continue
+    TUIC_USERS="{"
+    for i in "${!UUIDS[@]}"; do
+        U="${UUIDS[$i]}"
+        [[ $i -gt 0 ]] && TUIC_USERS+=","
+        TUIC_USERS+="\"${U}\":\"${U}\""
+    done
+    TUIC_USERS+="}"
+    jq --argjson u "$TUIC_USERS" '.users = $u' "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
+done
+for SVC in tuic-direct tuic-warp; do
+    systemctl restart "$SVC" 2>/dev/null || true
+done
+
+echo "[$(date)] Synced ${#UUIDS[@]} users to hy2+tuic"
+SYNCEOF
+
+chmod +x "${CONFIG_DIR}/sync_users.sh"
+
+# Setup cron (every minute)
+CRON_LINE="* * * * * ${CONFIG_DIR}/sync_users.sh >> /var/log/xboard-sync.log 2>&1"
+EXISTING_CRON=$(crontab -l 2>/dev/null || true)
+FILTERED_CRON=$(echo "$EXISTING_CRON" | grep -v 'sync_users.sh' || true)
+echo "${FILTERED_CRON}
+${CRON_LINE}" | crontab -
+
+# Run first sync immediately
+"${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
+echo -e "  ${GREEN}OK${NC}"
+
+# ============================================================
+# [10/11] Firewall + systemd + start services
+# ============================================================
+echo -e "${BLUE}[10/11] Starting services ...${NC}"
 
 # Open firewall for all ports
 for port in "${ALL_PORTS[@]}"; do
@@ -362,7 +443,7 @@ done
 sleep 3
 
 # ============================================================
-# Final status report
+# [11/11] Final status
 # ============================================================
 echo ""
 echo -e "${GREEN}=======================================================${NC}"
@@ -380,5 +461,7 @@ echo -e "  xboard-node: xray(VLESS/gRPC/Trojan/VMess) + SS"
 echo -e "  hysteria2:   4 instances (direct/obfs/warp/obfs-warp)"
 echo -e "  tuic:        2 instances (direct/warp)"
 echo -e "  Config:      ${CONFIG_DIR}"
+echo -e "  User sync:   Every minute (cron -> hy2+tuic)"
+echo -e "  Sync log:    /var/log/xboard-sync.log"
 echo -e "${GREEN}=======================================================${NC}"
 echo ""
