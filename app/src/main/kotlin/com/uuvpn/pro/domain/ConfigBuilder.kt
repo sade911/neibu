@@ -26,13 +26,14 @@ object ConfigBuilder {
         logLevel: String = "warn",
         routeMode: String = "bypass_cn",   // bypass_cn / global
         dnsMode: String = "auto",
+        enableTun: Boolean = true,
     ): String {
         val outbound = buildOutbound(node, uuid)
 
         val config = mutableMapOf<String, Any>(
             "log" to mapOf("level" to logLevel, "timestamp" to true),
             "dns" to buildDns(routeMode),
-            "inbounds" to buildInbounds(httpPort),
+            "inbounds" to buildInbounds(httpPort, enableTun),
             "outbounds" to listOf(
                 outbound,
                 mapOf("type" to "direct", "tag" to "direct"),
@@ -108,23 +109,28 @@ object ConfigBuilder {
     // Inbounds
     // ============================================================
 
-    private fun buildInbounds(httpPort: Int): List<Map<String, Any>> {
-        return listOf(
-            mapOf(
+    private fun buildInbounds(httpPort: Int, enableTun: Boolean): List<Map<String, Any>> {
+        val inbounds = mutableListOf<Map<String, Any>>()
+
+        if (enableTun) {
+            inbounds.add(mapOf(
                 "type" to "tun",
                 "tag" to "tun-in",
                 "address" to listOf("172.19.0.1/30", "fdfe:dcba:9876::1/126"),
                 "auto_route" to true,
                 "strict_route" to true,
                 "stack" to "system",
-            ),
-            mapOf(
-                "type" to "mixed",
-                "tag" to "mixed-in",
-                "listen" to "127.0.0.1",
-                "listen_port" to httpPort,
-            ),
-        )
+            ))
+        }
+
+        inbounds.add(mapOf(
+            "type" to "mixed",
+            "tag" to "mixed-in",
+            "listen" to "127.0.0.1",
+            "listen_port" to httpPort,
+        ))
+
+        return inbounds
     }
 
     // ============================================================

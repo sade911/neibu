@@ -53,13 +53,24 @@ class VpnManager @Inject constructor(
         try {
             val routeMode = prefs.routeMode.first()
             val logLevel = prefs.logLevel.first()
-            Log.d(TAG, "Route mode: $routeMode, Log level: $logLevel")
+
+            // 检测是否在模拟器上运行（模拟器不支持 TUN）
+            val isEmulator = android.os.Build.FINGERPRINT.contains("generic", ignoreCase = true)
+                    || android.os.Build.MODEL.contains("Emulator", ignoreCase = true)
+                    || android.os.Build.MODEL.contains("Android SDK", ignoreCase = true)
+                    || android.os.Build.MANUFACTURER.contains("Genymotion", ignoreCase = true)
+                    || android.os.Build.PRODUCT.contains("sdk", ignoreCase = true)
+                    || android.os.Build.HARDWARE.contains("goldfish", ignoreCase = true)
+                    || android.os.Build.HARDWARE.contains("ranchu", ignoreCase = true)
+            val enableTun = !isEmulator
+            Log.d(TAG, "Route mode: $routeMode, Log level: $logLevel, enableTun: $enableTun (emulator=$isEmulator)")
 
             val configJson = ConfigBuilder.build(
                 node = node,
                 uuid = uuid,
                 routeMode = routeMode,
                 logLevel = logLevel,
+                enableTun = enableTun,
             )
             Log.d(TAG, "Config built OK, length=${configJson.length}")
 
