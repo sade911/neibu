@@ -78,9 +78,24 @@ ARCH=$(get_arch)
 # ============================================================
 echo -e "${BLUE}[1/12] 安装依赖 ...${NC}"
 if command -v apt-get &>/dev/null; then
-    apt-get update -qq && apt-get install -y -qq curl jq openssl unzip wget >/dev/null 2>&1
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq curl openssl unzip wget 2>/dev/null || true
 elif command -v yum &>/dev/null; then
-    yum install -y -q curl jq openssl unzip wget >/dev/null 2>&1
+    yum install -y -q curl openssl unzip wget 2>/dev/null || true
+fi
+
+# jq 单独安装（很多最小镜像里没有）
+if ! command -v jq &>/dev/null; then
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y -qq jq 2>/dev/null || true
+    elif command -v yum &>/dev/null; then
+        yum install -y -q jq 2>/dev/null || true
+    fi
+fi
+if ! command -v jq &>/dev/null; then
+    echo -e "  ${YELLOW}apt/yum 安装 jq 失败，下载二进制...${NC}"
+    curl -fsSL -o /usr/local/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 2>/dev/null
+    chmod +x /usr/local/bin/jq 2>/dev/null || true
 fi
 echo -e "  ${GREEN}✓ 依赖就绪${NC}"
 
@@ -109,12 +124,19 @@ echo -e "  ${GREEN}✓ hysteria2: $($HY2_BIN version 2>/dev/null | head -1 || ec
 echo -e "${BLUE}[4/12] 安装 TUIC v5 ...${NC}"
 TUIC_BIN="/usr/local/bin/tuic-server"
 if [[ ! -f "$TUIC_BIN" ]]; then
-    TUIC_VER=$(curl -s https://api.github.com/repos/EAimTY/tuic/releases/latest | jq -r '.tag_name // "tuic-server-1.0.0"')
+    TUIC_VER="tuic-server-1.0.0"
+    if command -v jq &>/dev/null; then
+        TUIC_VER=$(curl -s https://api.github.com/repos/EAimTY/tuic/releases/latest 2>/dev/null | jq -r '.tag_name // "tuic-server-1.0.0"') || TUIC_VER="tuic-server-1.0.0"
+    fi
     TUIC_URL="https://github.com/EAimTY/tuic/releases/download/${TUIC_VER}/tuic-server-1.0.0-x86_64-unknown-linux-musl"
     [[ "$ARCH" == "arm64" ]] && TUIC_URL="https://github.com/EAimTY/tuic/releases/download/${TUIC_VER}/tuic-server-1.0.0-aarch64-unknown-linux-musl"
-    curl -fsSL -o "$TUIC_BIN" "$TUIC_URL" && chmod +x "$TUIC_BIN"
+    curl -fsSL -o "$TUIC_BIN" "$TUIC_URL" 2>/dev/null && chmod +x "$TUIC_BIN" || echo -e "  ${YELLOW}⚠ TUIC 下载失败${NC}"
 fi
-echo -e "  ${GREEN}✓ tuic-server 就绪${NC}"
+if [[ -f "$TUIC_BIN" ]]; then
+    echo -e "  ${GREEN}✓ tuic-server 就绪${NC}"
+else
+    echo -e "  ${YELLOW}⚠ tuic-server 跳过${NC}"
+fi
 
 # ============================================================
 # Step 5: 安装 Shadowsocks-Rust
@@ -122,15 +144,24 @@ echo -e "  ${GREEN}✓ tuic-server 就绪${NC}"
 echo -e "${BLUE}[5/12] 安装 Shadowsocks-Rust ...${NC}"
 SS_BIN="/usr/local/bin/ssserver"
 if [[ ! -f "$SS_BIN" ]]; then
-    SS_VER=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | jq -r '.tag_name // "v1.20.4"')
+    SS_VER="v1.21.2"
+    if command -v jq &>/dev/null; then
+        SS_VER=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.21.2"') || SS_VER="v1.21.2"
+    fi
     SS_ASSET="shadowsocks-${SS_VER}.x86_64-unknown-linux-musl.tar.xz"
     [[ "$ARCH" == "arm64" ]] && SS_ASSET="shadowsocks-${SS_VER}.aarch64-unknown-linux-musl.tar.xz"
-    curl -fsSL -o /tmp/ss-rust.tar.xz "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VER}/${SS_ASSET}"
-    tar -xJf /tmp/ss-rust.tar.xz -C /usr/local/bin/ ssserver 2>/dev/null || tar -xJf /tmp/ss-rust.tar.xz -C /usr/local/bin/
-    chmod +x "$SS_BIN"
-    rm -f /tmp/ss-rust.tar.xz
+    curl -fsSL -o /tmp/ss-rust.tar.xz "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VER}/${SS_ASSET}" 2>/dev/null
+    if [[ -f /tmp/ss-rust.tar.xz ]]; then
+        tar -xJf /tmp/ss-rust.tar.xz -C /usr/local/bin/ ssserver 2>/dev/null || tar -xJf /tmp/ss-rust.tar.xz -C /usr/local/bin/ 2>/dev/null
+        chmod +x "$SS_BIN" 2>/dev/null || true
+        rm -f /tmp/ss-rust.tar.xz
+    fi
 fi
-echo -e "  ${GREEN}✓ ssserver: $($SS_BIN --version 2>/dev/null || echo 'installed')${NC}"
+if [[ -f "$SS_BIN" ]]; then
+    echo -e "  ${GREEN}✓ ssserver: $($SS_BIN --version 2>/dev/null || echo 'installed')${NC}"
+else
+    echo -e "  ${YELLOW}⚠ ssserver 跳过${NC}"
+fi
 
 # ============================================================
 # Step 6: 安装 NaïveProxy (caddy-naive)
