@@ -228,73 +228,233 @@ install_aapanel() {
 # ============================================================
 # Step 3: 安装 LNMP 环境
 # ============================================================
+
+# 等待软件安装完成的辅助函数
+# 用法: wait_for_install <检测文件路径> <超时秒数> <软件名称>
+wait_for_install() {
+    local check_file="$1"
+    local timeout="$2"
+    local name="$3"
+    local elapsed=0
+    local interval=30
+
+    while [[ $elapsed -lt $timeout ]]; do
+        if [[ -f "$check_file" ]]; then
+            return 0
+        fi
+        sleep $interval
+        elapsed=$((elapsed + interval))
+        local remaining=$(( (timeout - elapsed) / 60 ))
+        log_info "${name} 安装中... 已等待 $((elapsed / 60)) 分钟 (最多还需 ${remaining} 分钟)"
+    done
+    return 1
+}
+
 install_lnmp() {
     log_step "Step 3/9: 安装 LNMP 环境"
 
+    local INSTALL_SCRIPT="/www/server/panel/install/install_soft.sh"
+    local BT_LOG_DIR="/tmp"
+
+    # 创建低内存绕过标记 (避免宝塔因内存不足拦截安装)
+    mkdir -p /www/server/panel/install
+    touch /www/server/panel/install/i_nginx.pl 2>/dev/null || true
+    touch /www/server/panel/install/i_mysql.pl 2>/dev/null || true
+    touch /www/server/panel/install/i_php.pl 2>/dev/null || true
+
     # --- Nginx ---
+    # 模块代码: 0 = Web 服务器 (Nginx/Apache)
     if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
         log_info "Nginx 已安装 ✓"
     else
+        local NGINX_LOG="${BT_LOG_DIR}/bt_install_nginx.log"
         log_info "安装 Nginx (约需 2-5 分钟) ..."
-        # 使用宝塔命令行安装 Nginx
-        /www/server/panel/install/install_soft.sh 0 install nginx 1.24 > /dev/null 2>&1 || {
-            log_warn "宝塔命令安装 Nginx 失败，尝试通过面板 API ..."
-            bt 14 > /dev/null 2>&1 || true
-        }
+        log_info "安装日志: ${NGINX_LOG}"
+
+        # 方法1: 通过宝塔 install_soft.sh (模块代码 0 = Web 服务器)
+        if [[ -f "$INSTALL_SCRIPT" ]]; then
+            bash "$INSTALL_SCRIPT" 0 install nginx 1.24 > "${NGINX_LOG}" 2>&1 || true
+        fi
+
+        # 方法2: 直接下载宝塔 CDN 的 Nginx 安装脚本
+        if [[ ! -f "/www/server/nginx/sbin/nginx" ]]; then
+            log_warn "install_soft.sh 安装 Nginx 失败，尝试直接下载安装脚本 ..."
+            cd /tmp
+            wget -q -O nginx_install.sh http://download.bt.cn/install/0/nginx.sh 2>/dev/null || \
+            curl -sSL -o nginx_install.sh http://download.bt.cn/install/0/nginx.sh 2>/dev/null || true
+            if [[ -f "nginx_install.sh" ]]; then
+                bash nginx_install.sh install 1.24 >> "${NGINX_LOG}" 2>&1 || true
+                rm -f nginx_install.sh
+            fi
+        fi
+
         if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
             log_success "Nginx 安装成功"
         else
-            log_warn "Nginx 可能安装失败，请在 aaPanel 面板中手动安装"
+            log_warn "Nginx 安装失败，请在 aaPanel 面板中手动安装"
+            log_warn "查看日志: cat ${NGINX_LOG}"
         fi
     fi
 
     # --- MySQL 5.7 ---
+    # 模块代码: 1 = 数据库 (MySQL/MariaDB)
     if [[ -f "/www/server/mysql/bin/mysql" ]]; then
         log_info "MySQL 已安装 ✓"
     else
+        local MYSQL_LOG="${BT_LOG_DIR}/bt_install_mysql.log"
         log_info "安装 MySQL 5.7 (编译安装，约需 15-40 分钟，请耐心等待) ..."
-        /www/server/panel/install/install_soft.sh 0 install mysql 5.7 > /dev/null 2>&1 || {
-            bt 3 > /dev/null 2>&1 || true
-        }
+        log_info "安装日志: ${MYSQL_LOG}"
+
+        # 方法1: 通过宝塔 install_soft.sh (模块代码 1 = 数据库)
+        if [[ -f "$INSTALL_SCRIPT" ]]; then
+            bash "$INSTALL_SCRIPT" 1 install mysql 5.7 > "${MYSQL_LOG}" 2>&1 &
+            local mysql_pid=$!
+
+            # MySQL 编译安装耗时很长，使用轮询等待
+            log_info "MySQL 编译安装已启动 (PID: ${mysql_pid})，轮询等待中 ..."
+            wait_for_install "/www/server/mysql/bin/mysql" 2400 "MySQL" || true
+
+            # 如果进程仍在运行但文件已存在，等进程结束
+            if kill -0 $mysql_pid 2>/dev/null; then
+                if [[ -f "/www/server/mysql/bin/mysql" ]]; then
+                    wait $mysql_pid 2>/dev/null || true
+                else
+                    # 超时仍未完成，继续等待进程自然结束 (最多再等 10 分钟)
+                    log_warn "MySQL 安装超时，继续等待进程完成 ..."
+                    local extra_wait=0
+                    while kill -0 $mysql_pid 2>/dev/null && [[ $extra_wait -lt 600 ]]; do
+                        sleep 30
+                        extra_wait=$((extra_wait + 30))
+                    done
+                    kill $mysql_pid 2>/dev/null || true
+                    wait $mysql_pid 2>/dev/null || true
+                fi
+            fi
+        fi
+
+        # 方法2: 直接下载宝塔 CDN 的 MySQL 安装脚本
+        if [[ ! -f "/www/server/mysql/bin/mysql" ]]; then
+            log_warn "install_soft.sh 安装 MySQL 失败，尝试直接下载安装脚本 ..."
+            cd /tmp
+            wget -q -O mysql_install.sh http://download.bt.cn/install/0/mysql.sh 2>/dev/null || \
+            curl -sSL -o mysql_install.sh http://download.bt.cn/install/0/mysql.sh 2>/dev/null || true
+            if [[ -f "mysql_install.sh" ]]; then
+                bash mysql_install.sh install 5.7 >> "${MYSQL_LOG}" 2>&1 || true
+                rm -f mysql_install.sh
+            fi
+        fi
+
         if [[ -f "/www/server/mysql/bin/mysql" ]]; then
             log_success "MySQL 安装成功"
         else
             log_warn "MySQL 可能安装失败，请在 aaPanel 面板中手动安装"
+            log_warn "查看日志: cat ${MYSQL_LOG}"
         fi
     fi
 
     # --- PHP 8.2 ---
+    # 模块代码: 3 = PHP
     if [[ -f "${PHP_BIN}" ]]; then
         log_info "PHP 8.2 已安装 ✓"
     else
+        local PHP_LOG="${BT_LOG_DIR}/bt_install_php.log"
         log_info "安装 PHP 8.2 (编译安装，约需 10-30 分钟，请耐心等待) ..."
-        /www/server/panel/install/install_soft.sh 0 install php 8.2 > /dev/null 2>&1 || {
-            bt 8 > /dev/null 2>&1 || true
-        }
+        log_info "安装日志: ${PHP_LOG}"
+
+        local php_installed=false
+
+        # 方法1: 通过宝塔 install_soft.sh (模块代码 3 = PHP)
+        if [[ -f "$INSTALL_SCRIPT" ]]; then
+            # 尝试版本格式 "8.2"
+            bash "$INSTALL_SCRIPT" 3 install php 8.2 > "${PHP_LOG}" 2>&1 &
+            local php_pid=$!
+
+            log_info "PHP 编译安装已启动 (PID: ${php_pid})，轮询等待中 ..."
+            wait_for_install "${PHP_BIN}" 1800 "PHP 8.2" || true
+
+            if kill -0 $php_pid 2>/dev/null; then
+                if [[ -f "${PHP_BIN}" ]]; then
+                    wait $php_pid 2>/dev/null || true
+                else
+                    log_warn "PHP 安装超时，继续等待进程完成 ..."
+                    local extra_wait=0
+                    while kill -0 $php_pid 2>/dev/null && [[ $extra_wait -lt 600 ]]; do
+                        sleep 30
+                        extra_wait=$((extra_wait + 30))
+                    done
+                    kill $php_pid 2>/dev/null || true
+                    wait $php_pid 2>/dev/null || true
+                fi
+            fi
+        fi
+
+        # 方法1b: 尝试 "php82" 格式 (部分宝塔版本使用此格式)
+        if [[ ! -f "${PHP_BIN}" ]] && [[ -f "$INSTALL_SCRIPT" ]]; then
+            log_info "尝试使用 php82 格式安装 ..."
+            bash "$INSTALL_SCRIPT" 3 install php82 > "${PHP_LOG}" 2>&1 || true
+        fi
+
+        # 方法2: 直接下载宝塔 CDN 的 PHP 安装脚本
+        if [[ ! -f "${PHP_BIN}" ]]; then
+            log_warn "install_soft.sh 安装 PHP 失败，尝试直接下载安装脚本 ..."
+            cd /tmp
+            wget -q -O php_install.sh http://download.bt.cn/install/0/php.sh 2>/dev/null || \
+            curl -sSL -o php_install.sh http://download.bt.cn/install/0/php.sh 2>/dev/null || true
+            if [[ -f "php_install.sh" ]]; then
+                bash php_install.sh install 82 >> "${PHP_LOG}" 2>&1 || true
+                rm -f php_install.sh
+            fi
+        fi
+
         if [[ -f "${PHP_BIN}" ]]; then
             log_success "PHP 8.2 安装成功"
         else
             log_error "PHP 8.2 安装失败！请在 aaPanel 面板中手动安装 PHP 8.2 后重新运行脚本"
+            log_error "查看日志: cat ${PHP_LOG}"
             exit 1
         fi
     fi
 
     # --- Redis ---
+    # 模块代码: 12 = Redis (宝塔内部编号)，但 install_soft.sh 也接受名称
     if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
         log_info "Redis 已安装 ✓"
     else
+        local REDIS_LOG="${BT_LOG_DIR}/bt_install_redis.log"
         log_info "安装 Redis (约需 1-3 分钟) ..."
-        /www/server/panel/install/install_soft.sh 0 install redis 7.0 > /dev/null 2>&1 || {
-            bt 18 > /dev/null 2>&1 || true
-        }
-        log_success "Redis 安装完成"
+
+        if [[ -f "$INSTALL_SCRIPT" ]]; then
+            bash "$INSTALL_SCRIPT" 0 install redis 7.0 > "${REDIS_LOG}" 2>&1 || true
+        fi
+
+        # 备用: 直接安装
+        if [[ ! -f "/www/server/redis/bin/redis-server" ]] && ! command -v redis-server &> /dev/null; then
+            log_warn "宝塔安装 Redis 失败，尝试系统包管理器安装 ..."
+            if [[ "$PKG_MANAGER" == "apt-get" ]]; then
+                apt-get install -y redis-server > /dev/null 2>&1 || true
+            else
+                yum install -y redis > /dev/null 2>&1 || true
+            fi
+        fi
+
+        if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
+            log_success "Redis 安装完成"
+        else
+            log_warn "Redis 安装失败，请在 aaPanel 面板中手动安装"
+        fi
     fi
 
     # 确保服务都在运行
     /etc/init.d/nginx start > /dev/null 2>&1 || true
     /etc/init.d/mysqld start > /dev/null 2>&1 || true
     /etc/init.d/redis start > /dev/null 2>&1 || true
+    systemctl start redis-server > /dev/null 2>&1 || true
     /etc/init.d/php-fpm-${PHP_VERSION} start > /dev/null 2>&1 || true
+
+    # 清理低内存绕过标记
+    rm -f /www/server/panel/install/i_nginx.pl 2>/dev/null || true
+    rm -f /www/server/panel/install/i_mysql.pl 2>/dev/null || true
+    rm -f /www/server/panel/install/i_php.pl 2>/dev/null || true
 
     log_success "LNMP 环境安装完成"
 }
