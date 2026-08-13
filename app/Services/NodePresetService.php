@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Server;
+use App\Models\ServerGroup;
 use App\Models\ServerMachine;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -61,6 +62,12 @@ class NodePresetService
         if ($existingCount > 0) {
             Log::info("Machine {$machine->id} already has {$existingCount} nodes, skipping preset creation");
             return 0;
+        }
+
+        // 如果没传 group_ids，自动获取所有权限组
+        if (empty($groupIds)) {
+            $groupIds = ServerGroup::pluck('id')->map(fn($id) => (string) $id)->toArray();
+            Log::info("Auto-assigned all group_ids: [" . implode(',', $groupIds) . "]");
         }
 
         // Reality 密钥: 优先用外部传入，否则自动生成
