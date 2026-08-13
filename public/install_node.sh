@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Xboard Node 多后端一键部署脚�?v2
-# 架构: xray-core + hysteria2 + tuic-server + ssserver + caddy-naive
-# 端口: 全部随机分配
+# Xboard Node multi-backend deployment script v2
+# Architecture: xboard-node + xray-core + hysteria2 + tuic + ss-rust + naiveproxy
+# Ports: randomly assigned
 #
-# 用法:
+# Usage:
 #   curl -fsSL <panel>/install_node.sh | sudo bash -s -- \
 #     --panel https://your-panel.com \
 #     --token YOUR_MACHINE_TOKEN \
@@ -28,12 +28,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "$PANEL_URL" ]] && { echo -e "${RED}缺少 --panel${NC}"; exit 1; }
-[[ -z "$TOKEN" ]]     && { echo -e "${RED}缺少 --token${NC}"; exit 1; }
-[[ -z "$MACHINE_ID" ]] && { echo -e "${RED}缺少 --machine-id${NC}"; exit 1; }
+[[ -z "$PANEL_URL" ]] && { echo -e "${RED}Missing --panel${NC}"; exit 1; }
+[[ -z "$TOKEN" ]]     && { echo -e "${RED}Missing --token${NC}"; exit 1; }
+[[ -z "$MACHINE_ID" ]] && { echo -e "${RED}Missing --machine-id${NC}"; exit 1; }
 PANEL_URL="${PANEL_URL%/}"
 
-# ============================================================
 get_server_ip() {
     curl -s4 --connect-timeout 5 https://api.ipify.org 2>/dev/null || \
     curl -s4 --connect-timeout 5 https://ifconfig.me 2>/dev/null || echo ""
@@ -53,32 +52,26 @@ generate_random_ports() {
 }
 
 get_arch() {
-    local arch
-    arch=$(uname -m)
-    case "$arch" in
+    case "$(uname -m)" in
         x86_64)  echo "amd64" ;;
         aarch64) echo "arm64" ;;
-        *) echo "$arch" ;;
+        *) echo "$(uname -m)" ;;
     esac
 }
 
-# ============================================================
 echo ""
-echo -e "${CYAN}╔═══════════════════════════════════════════════════════�?{NC}"
-echo -e "${CYAN}�? Xboard 多后端节点部�?v2                              �?{NC}"
-echo -e "${CYAN}�? xray + hysteria2 + tuic + ss-rust + naiveproxy       �?{NC}"
-echo -e "${CYAN}╚═══════════════════════════════════════════════════════�?{NC}"
+echo -e "${CYAN}=======================================================${NC}"
+echo -e "${CYAN}  Xboard Multi-Backend Node Deployment v2${NC}"
+echo -e "${CYAN}  xboard-node + xray + hy2 + tuic + ss-rust + naive${NC}"
+echo -e "${CYAN}=======================================================${NC}"
 echo ""
 
 mkdir -p "$CONFIG_DIR" "$CERT_DIR"
 ARCH=$(get_arch)
 
-# ============================================================
-# Step 1: 依赖
-# ============================================================
-echo -e "${BLUE}[1/12] 安装依赖 ...${NC}"
+# [1/13] Dependencies
+echo -e "${BLUE}[1/13] Installing dependencies ...${NC}"
 if command -v apt-get &>/dev/null; then
-    # 修复失效�?Debian 源（�?bullseye-backports 已归档）
     sed -i '/backports/d' /etc/apt/sources.list 2>/dev/null || true
     for f in /etc/apt/sources.list.d/*.list; do
         [[ -f "$f" ]] && sed -i '/backports/d' "$f" 2>/dev/null || true
@@ -86,88 +79,59 @@ if command -v apt-get &>/dev/null; then
     apt-get update -qq 2>/dev/null || true
     apt-get install -y -qq curl jq openssl unzip wget 2>/dev/null || true
 elif command -v yum &>/dev/null; then
-    yum install -y -q curl openssl unzip wget 2>/dev/null || true
-fi
-
-# jq 单独安装（很多最小镜像里没有�?if ! command -v jq &>/dev/null; then
-    if command -v apt-get &>/dev/null; then
-        apt-get install -y -qq jq 2>/dev/null || true
-    elif command -v yum &>/dev/null; then
-        yum install -y -q jq 2>/dev/null || true
-    fi
+    yum install -y -q curl jq openssl unzip wget 2>/dev/null || true
 fi
 if ! command -v jq &>/dev/null; then
-    echo -e "  ${YELLOW}apt/yum 安装 jq 失败，下载二进制...${NC}"
-    curl -fsSL -o /usr/local/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 2>/dev/null
+    echo -e "  ${YELLOW}Installing jq binary...${NC}"
+    JQ_ARCH="amd64"; [[ "$ARCH" == "arm64" ]] && JQ_ARCH="arm64"
+    curl -fsSL -o /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${JQ_ARCH}" 2>/dev/null
     chmod +x /usr/local/bin/jq 2>/dev/null || true
 fi
-echo -e "  ${GREEN}�?依赖就绪${NC}"
+echo -e "  ${GREEN}OK${NC}"
 
-# ============================================================
-# Step 2: 安装 xboard-node (用户同步/流量上报/设备限制)
-# ============================================================
-echo -e "${BLUE}[2/13] 安装 xboard-node ...${NC}"
-XBOARD_NODE_INSTALLER="https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh"
+# [2/13] xboard-node
+echo -e "${BLUE}[2/13] Installing xboard-node ...${NC}"
 if ! systemctl is-active --quiet xboard-node 2>/dev/null; then
-    curl -fsSL "$XBOARD_NODE_INSTALLER" | bash -s -- \
-        --mode machine \
-        --panel "$PANEL_URL" \
-        --token "$TOKEN" \
-        --machine-id "$MACHINE_ID" 2>&1 | tail -5
-    echo -e "  ${GREEN}�?xboard-node 安装完成${NC}"
+    curl -fsSL https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh | bash -s -- \
+        --mode machine --panel "$PANEL_URL" --token "$TOKEN" --machine-id "$MACHINE_ID" 2>&1 | tail -5
+    echo -e "  ${GREEN}OK${NC}"
 else
-    echo -e "  ${YELLOW}�?xboard-node 已运�?{NC}"
+    echo -e "  ${YELLOW}Already running${NC}"
 fi
 
-# ============================================================
-# Step 3: 安装 xray-core
-# ============================================================
-echo -e "${BLUE}[3/13] 安装 xray-core ...${NC}"
+# [3/13] xray-core
+echo -e "${BLUE}[3/13] Installing xray-core ...${NC}"
 if ! command -v xray &>/dev/null; then
     bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>&1 | tail -3
 fi
-echo -e "  ${GREEN}�?xray-core: $(xray version 2>/dev/null | head -1 || echo 'installed')${NC}"
+echo -e "  ${GREEN}OK: $(xray version 2>/dev/null | head -1 || echo 'installed')${NC}"
 
-# ============================================================
-# Step 3: 安装 Hysteria 2
-# ============================================================
-echo -e "${BLUE}[4/13] 安装 Hysteria 2 ...${NC}"
+# [4/13] Hysteria 2
+echo -e "${BLUE}[4/13] Installing Hysteria 2 ...${NC}"
 HY2_BIN="/usr/local/bin/hysteria"
 if [[ ! -f "$HY2_BIN" ]]; then
     bash <(curl -fsSL https://get.hy2.sh/) 2>&1 | tail -3
 fi
-echo -e "  ${GREEN}�?hysteria2: $($HY2_BIN version 2>/dev/null | head -1 || echo 'installed')${NC}"
+echo -e "  ${GREEN}OK${NC}"
 
-# ============================================================
-# Step 4: 安装 TUIC server
-# ============================================================
-echo -e "${BLUE}[5/13] 安装 TUIC v5 ...${NC}"
+# [5/13] TUIC v5
+echo -e "${BLUE}[5/13] Installing TUIC v5 ...${NC}"
 TUIC_BIN="/usr/local/bin/tuic-server"
 if [[ ! -f "$TUIC_BIN" ]]; then
     TUIC_VER="tuic-server-1.0.0"
-    if command -v jq &>/dev/null; then
-        TUIC_VER=$(curl -s https://api.github.com/repos/EAimTY/tuic/releases/latest 2>/dev/null | jq -r '.tag_name // "tuic-server-1.0.0"') || TUIC_VER="tuic-server-1.0.0"
-    fi
+    command -v jq &>/dev/null && TUIC_VER=$(curl -s https://api.github.com/repos/EAimTY/tuic/releases/latest 2>/dev/null | jq -r '.tag_name // "tuic-server-1.0.0"') || true
     TUIC_URL="https://github.com/EAimTY/tuic/releases/download/${TUIC_VER}/tuic-server-1.0.0-x86_64-unknown-linux-musl"
     [[ "$ARCH" == "arm64" ]] && TUIC_URL="https://github.com/EAimTY/tuic/releases/download/${TUIC_VER}/tuic-server-1.0.0-aarch64-unknown-linux-musl"
-    curl -fsSL -o "$TUIC_BIN" "$TUIC_URL" 2>/dev/null && chmod +x "$TUIC_BIN" || echo -e "  ${YELLOW}�?TUIC 下载失败${NC}"
+    curl -fsSL -o "$TUIC_BIN" "$TUIC_URL" 2>/dev/null && chmod +x "$TUIC_BIN" || true
 fi
-if [[ -f "$TUIC_BIN" ]]; then
-    echo -e "  ${GREEN}�?tuic-server 就绪${NC}"
-else
-    echo -e "  ${YELLOW}�?tuic-server 跳过${NC}"
-fi
+[[ -f "$TUIC_BIN" ]] && echo -e "  ${GREEN}OK${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
 
-# ============================================================
-# Step 5: 安装 Shadowsocks-Rust
-# ============================================================
-echo -e "${BLUE}[6/13] 安装 Shadowsocks-Rust ...${NC}"
+# [6/13] Shadowsocks-Rust
+echo -e "${BLUE}[6/13] Installing Shadowsocks-Rust ...${NC}"
 SS_BIN="/usr/local/bin/ssserver"
 if [[ ! -f "$SS_BIN" ]]; then
     SS_VER="v1.21.2"
-    if command -v jq &>/dev/null; then
-        SS_VER=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.21.2"') || SS_VER="v1.21.2"
-    fi
+    command -v jq &>/dev/null && SS_VER=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.21.2"') || true
     SS_ASSET="shadowsocks-${SS_VER}.x86_64-unknown-linux-musl.tar.xz"
     [[ "$ARCH" == "arm64" ]] && SS_ASSET="shadowsocks-${SS_VER}.aarch64-unknown-linux-musl.tar.xz"
     curl -fsSL -o /tmp/ss-rust.tar.xz "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VER}/${SS_ASSET}" 2>/dev/null
@@ -177,27 +141,19 @@ if [[ ! -f "$SS_BIN" ]]; then
         rm -f /tmp/ss-rust.tar.xz
     fi
 fi
-if [[ -f "$SS_BIN" ]]; then
-    echo -e "  ${GREEN}�?ssserver: $($SS_BIN --version 2>/dev/null || echo 'installed')${NC}"
-else
-    echo -e "  ${YELLOW}�?ssserver 跳过${NC}"
-fi
+[[ -f "$SS_BIN" ]] && echo -e "  ${GREEN}OK: $($SS_BIN --version 2>/dev/null || echo 'ssserver')${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
 
-# ============================================================
-# Step 6: 安装 NaïveProxy (caddy-naive)
-# ============================================================
-echo -e "${BLUE}[7/13] 安装 NaïveProxy (caddy-naive) ...${NC}"
+# [7/13] NaiveProxy
+echo -e "${BLUE}[7/13] Installing NaiveProxy ...${NC}"
 NAIVE_BIN="/usr/local/bin/caddy-naive"
 if [[ ! -f "$NAIVE_BIN" ]]; then
-    # 方法1: Caddy 官方构建 API (自动编译�?naive 模块�?caddy)
-    CADDY_ARCH="amd64"
-    [[ "$ARCH" == "arm64" ]] && CADDY_ARCH="arm64"
+    CADDY_ARCH="amd64"; [[ "$ARCH" == "arm64" ]] && CADDY_ARCH="arm64"
     curl -fsSL -o "$NAIVE_BIN" \
         "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}&p=github.com%2Fcaddyserver%2Fforwardproxy%40caddy2%3Dgithub.com%2Fklzgrad%2Fforwardproxy%40naive" \
         2>/dev/null && chmod +x "$NAIVE_BIN" || {
-        # 方法2: 直接下载 naiveproxy 官方 release (服务端就�?naive 本身)
-        echo -e "  ${YELLOW}Caddy API 不可用，尝试 naiveproxy 官方 release...${NC}"
-        NP_VER=$(curl -s https://api.github.com/repos/klzgrad/naiveproxy/releases/latest 2>/dev/null | jq -r '.tag_name // "v136.0.7103.48-1"') || NP_VER="v136.0.7103.48-1"
+        echo -e "  ${YELLOW}Caddy API failed, trying naiveproxy release...${NC}"
+        NP_VER="v136.0.7103.48-1"
+        command -v jq &>/dev/null && NP_VER=$(curl -s https://api.github.com/repos/klzgrad/naiveproxy/releases/latest 2>/dev/null | jq -r '.tag_name // "v136.0.7103.48-1"') || true
         NP_ASSET="naiveproxy-${NP_VER}-linux-x64.tar.xz"
         [[ "$ARCH" == "arm64" ]] && NP_ASSET="naiveproxy-${NP_VER}-linux-arm64.tar.xz"
         curl -fsSL -o /tmp/naive.tar.xz "https://github.com/klzgrad/naiveproxy/releases/download/${NP_VER}/${NP_ASSET}" 2>/dev/null
@@ -210,49 +166,35 @@ if [[ ! -f "$NAIVE_BIN" ]]; then
         fi
     }
 fi
-if [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]]; then
-    echo -e "  ${GREEN}�?caddy-naive 就绪${NC}"
-else
-    echo -e "  ${YELLOW}�?NaïveProxy 安装跳过${NC}"
-fi
+[[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]] && echo -e "  ${GREEN}OK${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
 
-# ============================================================
-# Step 7: TLS 证书 + Reality 密钥
-# ============================================================
-echo -e "${BLUE}[8/13] 生成证书与密�?...${NC}"
+# [8/13] TLS cert + Reality keys
+echo -e "${BLUE}[8/13] Generating certs and keys ...${NC}"
 CERT_FILE="${CERT_DIR}/fullchain.pem"
 KEY_FILE="${CERT_DIR}/key.pem"
-
 if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
         -days 3650 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" \
         -subj "/CN=www.bing.com" 2>/dev/null
-    echo -e "  ${GREEN}�?TLS 自签证书${NC}"
 fi
-
 REALITY_OUTPUT=$(xray x25519 2>/dev/null)
 REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep 'Private key:' | awk '{print $3}')
 REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep 'Public key:' | awk '{print $3}')
 REALITY_SHORT_ID=$(openssl rand -hex 4)
-echo -e "  ${GREEN}�?Reality 密钥: ${REALITY_PUBLIC_KEY:0:16}...${NC}"
+echo -e "  ${GREEN}OK${NC}"
 
-# ============================================================
-# Step 8: 随机端口
-# ============================================================
-echo -e "${BLUE}[9/13] 分配随机端口 ...${NC}"
+# [9/13] Random ports
+echo -e "${BLUE}[9/13] Assigning random ports ...${NC}"
 SERVER_IP=$(get_server_ip)
 echo -e "  IP: ${GREEN}${SERVER_IP}${NC}"
 
-# 20 端口 (10 直连 + 10 WARP)
 ALL_PORTS=($(generate_random_ports 20))
 
-# 直连
 P_VLESS_R=${ALL_PORTS[0]}; P_VLESS_G=${ALL_PORTS[1]}; P_TROJAN=${ALL_PORTS[2]}
 P_VMESS=${ALL_PORTS[3]}; P_HY2=${ALL_PORTS[4]}; P_HY2O=${ALL_PORTS[5]}
 P_SS22=${ALL_PORTS[6]}; P_SSC=${ALL_PORTS[7]}; P_TUIC=${ALL_PORTS[8]}
 P_NAIVE=${ALL_PORTS[9]}
 
-# WARP
 PW_VLESS_R=${ALL_PORTS[10]}; PW_VLESS_G=${ALL_PORTS[11]}; PW_TROJAN=${ALL_PORTS[12]}
 PW_VMESS=${ALL_PORTS[13]}; PW_HY2=${ALL_PORTS[14]}; PW_HY2O=${ALL_PORTS[15]}
 PW_SS22=${ALL_PORTS[16]}; PW_SSC=${ALL_PORTS[17]}; PW_TUIC=${ALL_PORTS[18]}
@@ -262,18 +204,16 @@ OBFS_PASSWORD=$(openssl rand -hex 8)
 NAIVE_USER="user"
 NAIVE_PASS=$(openssl rand -hex 12)
 
-echo -e "  ${CYAN}xray-core:${NC}  VLESS:${P_VLESS_R} gRPC:${P_VLESS_G} Trojan:${P_TROJAN} VMess:${P_VMESS}"
-echo -e "  ${CYAN}hysteria2:${NC} Hy2:${P_HY2} Hy2OBFS:${P_HY2O}"
-echo -e "  ${CYAN}tuic:${NC}      TUIC:${P_TUIC}"
-echo -e "  ${CYAN}ss-rust:${NC}   SS2022:${P_SS22} SSClassic:${P_SSC}"
-echo -e "  ${CYAN}naive:${NC}     NaïveProxy:${P_NAIVE}"
+echo -e "  xray:      VLESS:${P_VLESS_R} gRPC:${P_VLESS_G} Trojan:${P_TROJAN} VMess:${P_VMESS}"
+echo -e "  hysteria2: Hy2:${P_HY2} Hy2OBFS:${P_HY2O}"
+echo -e "  tuic:      TUIC:${P_TUIC}"
+echo -e "  ss-rust:   SS2022:${P_SS22} SSClassic:${P_SSC}"
+echo -e "  naive:     NaiveProxy:${P_NAIVE}"
 
-# ============================================================
-# Step 9: 生成配置文件
-# ============================================================
-echo -e "${BLUE}[10/13] 生成配置文件 ...${NC}"
+# [10/13] Generate config files
+echo -e "${BLUE}[10/13] Generating config files ...${NC}"
 
-# ---- xray-core ----
+# xray-core config
 cat > "${CONFIG_DIR}/xray.json" << XEOF
 {
   "log": {"loglevel": "warning"},
@@ -380,14 +320,24 @@ cat > "${CONFIG_DIR}/xray.json" << XEOF
 }
 XEOF
 
-# ---- Hysteria 2 (直连) ----
-cat > "${CONFIG_DIR}/hy2.yaml" << HY2EOF
-listen: :${P_HY2}
+# Hysteria 2 configs
+for INST in "hy2.yaml:${P_HY2}:" "hy2-obfs.yaml:${P_HY2O}:${OBFS_PASSWORD}" "hy2-warp.yaml:${PW_HY2}:" "hy2-obfs-warp.yaml:${PW_HY2O}:${OBFS_PASSWORD}"; do
+    IFS=':' read -r FNAME FPORT FOBFS <<< "$INST"
+    OBFS_BLOCK=""
+    if [[ -n "$FOBFS" ]]; then
+        OBFS_BLOCK="
+obfs:
+  type: salamander
+  salamander:
+    password: ${FOBFS}"
+    fi
+    cat > "${CONFIG_DIR}/${FNAME}" << HY2EOF
+listen: :${FPORT}
 
 tls:
   cert: ${CERT_FILE}
   key: ${KEY_FILE}
-
+${OBFS_BLOCK}
 auth:
   type: userpass
   userpass: {}
@@ -398,77 +348,14 @@ masquerade:
     url: https://www.bing.com
     rewriteHost: true
 HY2EOF
+done
 
-# ---- Hysteria 2 OBFS (直连) ----
-cat > "${CONFIG_DIR}/hy2-obfs.yaml" << HY2OEOF
-listen: :${P_HY2O}
-
-tls:
-  cert: ${CERT_FILE}
-  key: ${KEY_FILE}
-
-obfs:
-  type: salamander
-  salamander:
-    password: ${OBFS_PASSWORD}
-
-auth:
-  type: userpass
-  userpass: {}
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-HY2OEOF
-
-# ---- Hysteria 2 WARP ----
-cat > "${CONFIG_DIR}/hy2-warp.yaml" << HY2WEOF
-listen: :${PW_HY2}
-
-tls:
-  cert: ${CERT_FILE}
-  key: ${KEY_FILE}
-
-auth:
-  type: userpass
-  userpass: {}
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-HY2WEOF
-
-cat > "${CONFIG_DIR}/hy2-obfs-warp.yaml" << HY2OWEOF
-listen: :${PW_HY2O}
-
-tls:
-  cert: ${CERT_FILE}
-  key: ${KEY_FILE}
-
-obfs:
-  type: salamander
-  salamander:
-    password: ${OBFS_PASSWORD}
-
-auth:
-  type: userpass
-  userpass: {}
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://www.bing.com
-    rewriteHost: true
-HY2OWEOF
-
-# ---- TUIC v5 ----
-cat > "${CONFIG_DIR}/tuic.json" << TUICEOF
+# TUIC v5
+for INST in "tuic.json:${P_TUIC}" "tuic-warp.json:${PW_TUIC}"; do
+    IFS=':' read -r FNAME FPORT <<< "$INST"
+    cat > "${CONFIG_DIR}/${FNAME}" << TUICEOF
 {
-  "server": "[::]:${P_TUIC}",
+  "server": "[::]:${FPORT}",
   "users": {},
   "certificate": "${CERT_FILE}",
   "private_key": "${KEY_FILE}",
@@ -477,57 +364,22 @@ cat > "${CONFIG_DIR}/tuic.json" << TUICEOF
   "log_level": "warn"
 }
 TUICEOF
+done
 
-cat > "${CONFIG_DIR}/tuic-warp.json" << TUICWEOF
-{
-  "server": "[::]:${PW_TUIC}",
-  "users": {},
-  "certificate": "${CERT_FILE}",
-  "private_key": "${KEY_FILE}",
-  "congestion_control": "bbr",
-  "alpn": ["h3"],
-  "log_level": "warn"
-}
-TUICWEOF
-
-# ---- Shadowsocks-Rust ----
+# Shadowsocks-Rust
 SS_SERVER_KEY=$(openssl rand -base64 32)
 cat > "${CONFIG_DIR}/ss.json" << SSEOF
 {
   "servers": [
-    {
-      "server": "::",
-      "server_port": ${P_SS22},
-      "method": "2022-blake3-aes-256-gcm",
-      "password": "${SS_SERVER_KEY}",
-      "mode": "tcp_and_udp"
-    },
-    {
-      "server": "::",
-      "server_port": ${P_SSC},
-      "method": "aes-256-gcm",
-      "password": "xboard-ss-classic",
-      "mode": "tcp_and_udp"
-    },
-    {
-      "server": "::",
-      "server_port": ${PW_SS22},
-      "method": "2022-blake3-aes-256-gcm",
-      "password": "${SS_SERVER_KEY}",
-      "mode": "tcp_and_udp"
-    },
-    {
-      "server": "::",
-      "server_port": ${PW_SSC},
-      "method": "aes-256-gcm",
-      "password": "xboard-ss-classic",
-      "mode": "tcp_and_udp"
-    }
+    {"server": "::", "server_port": ${P_SS22}, "method": "2022-blake3-aes-256-gcm", "password": "${SS_SERVER_KEY}", "mode": "tcp_and_udp"},
+    {"server": "::", "server_port": ${P_SSC}, "method": "aes-256-gcm", "password": "xboard-ss-classic", "mode": "tcp_and_udp"},
+    {"server": "::", "server_port": ${PW_SS22}, "method": "2022-blake3-aes-256-gcm", "password": "${SS_SERVER_KEY}", "mode": "tcp_and_udp"},
+    {"server": "::", "server_port": ${PW_SSC}, "method": "aes-256-gcm", "password": "xboard-ss-classic", "mode": "tcp_and_udp"}
   ]
 }
 SSEOF
 
-# ---- NaïveProxy (caddy-naive) ----
+# NaiveProxy
 if [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]]; then
 cat > "${CONFIG_DIR}/naive.json" << NAIVEEOF
 {
@@ -536,65 +388,32 @@ cat > "${CONFIG_DIR}/naive.json" << NAIVEEOF
       "servers": {
         "naive-direct": {
           "listen": [":${P_NAIVE}"],
-          "routes": [{
-            "handle": [{
-              "handler": "forward_proxy",
-              "hide_ip": true,
-              "hide_via": true,
-              "auth_user_deprecated": "${NAIVE_USER}",
-              "auth_pass_deprecated": "${NAIVE_PASS}",
-              "probe_resistance": {}
-            }]
-          }],
-          "tls_connection_policies": [{
-            "certificate_selection": {"any_tag": ["naive"]}
-          }],
-          "automatic_https": {
-            "disable": true
-          }
+          "routes": [{"handle": [{"handler": "forward_proxy", "hide_ip": true, "hide_via": true, "auth_user_deprecated": "${NAIVE_USER}", "auth_pass_deprecated": "${NAIVE_PASS}", "probe_resistance": {}}]}],
+          "tls_connection_policies": [{"certificate_selection": {"any_tag": ["naive"]}}],
+          "automatic_https": {"disable": true}
         },
         "naive-warp": {
           "listen": [":${PW_NAIVE}"],
-          "routes": [{
-            "handle": [{
-              "handler": "forward_proxy",
-              "hide_ip": true,
-              "hide_via": true,
-              "auth_user_deprecated": "${NAIVE_USER}",
-              "auth_pass_deprecated": "${NAIVE_PASS}",
-              "probe_resistance": {}
-            }]
-          }],
-          "tls_connection_policies": [{
-            "certificate_selection": {"any_tag": ["naive"]}
-          }],
-          "automatic_https": {
-            "disable": true
-          }
+          "routes": [{"handle": [{"handler": "forward_proxy", "hide_ip": true, "hide_via": true, "auth_user_deprecated": "${NAIVE_USER}", "auth_pass_deprecated": "${NAIVE_PASS}", "probe_resistance": {}}]}],
+          "tls_connection_policies": [{"certificate_selection": {"any_tag": ["naive"]}}],
+          "automatic_https": {"disable": true}
         }
       }
     },
     "tls": {
       "certificates": {
-        "load_files": [{
-          "certificate": "${CERT_FILE}",
-          "key": "${KEY_FILE}",
-          "tags": ["naive"]
-        }]
+        "load_files": [{"certificate": "${CERT_FILE}", "key": "${KEY_FILE}", "tags": ["naive"]}]
       }
     }
   }
 }
 NAIVEEOF
-echo -e "  ${GREEN}�?NaïveProxy 配置${NC}"
 fi
 
-echo -e "  ${GREEN}�?全部配置文件已生�?{NC}"
+echo -e "  ${GREEN}OK${NC}"
 
-# ============================================================
-# Step 10: 保存环境变量 + API 注册
-# ============================================================
-echo -e "${BLUE}[11/13] 注册节点到面�?...${NC}"
+# [11/13] Register nodes
+echo -e "${BLUE}[11/13] Registering nodes ...${NC}"
 
 cat > "${CONFIG_DIR}/.env" << ENVEOF
 PANEL_URL=${PANEL_URL}
@@ -651,15 +470,13 @@ SETUP_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/autoSetup" 
 
 if [[ -n "$SETUP_RESPONSE" ]]; then
     NC_VAL=$(echo "$SETUP_RESPONSE" | jq -r '.data.nodes_created // 0')
-    echo -e "  ${GREEN}�?创建 ${NC_VAL} 个节�?{NC}"
+    echo -e "  ${GREEN}OK: Created ${NC_VAL} nodes${NC}"
 else
-    echo -e "  ${RED}�?API 注册失败${NC}"
+    echo -e "  ${RED}FAIL: API registration failed${NC}"
 fi
 
-# ============================================================
-# Step 11: 创建用户同步脚本
-# ============================================================
-echo -e "${BLUE}[12/13] 创建用户同步脚本 ...${NC}"
+# [12/13] User sync script
+echo -e "${BLUE}[12/13] Creating user sync script ...${NC}"
 
 cat > "${CONFIG_DIR}/sync_users.sh" << 'SYNCEOF'
 #!/bin/bash
@@ -667,14 +484,11 @@ set -euo pipefail
 CONFIG_DIR="/etc/xboard-node"
 source "${CONFIG_DIR}/.env"
 
-# 获取节点列表
 NODES_RESP=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/nodes" \
     -H "Content-Type: application/json" \
     -d "{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\"}" 2>/dev/null)
-
 [[ -z "$NODES_RESP" ]] && exit 1
 
-# 取第一个节点的用户列表
 NODE_ID=$(echo "$NODES_RESP" | jq -r '.data[0].id // empty' 2>/dev/null)
 [[ -z "$NODE_ID" ]] && exit 1
 
@@ -682,9 +496,9 @@ USERS_RESP=$(curl -s "${PANEL_URL}/api/v2/server/user?token=${TOKEN}&node_id=${N
 UUIDS=($(echo "$USERS_RESP" | jq -r '.users[]?.uuid // empty' 2>/dev/null | sort -u))
 [[ ${#UUIDS[@]} -eq 0 ]] && exit 0
 
-echo "[$(date)] 同步 ${#UUIDS[@]} 个用�?
+echo "[$(date)] Syncing ${#UUIDS[@]} users"
 
-# ---- 更新 xray-core ----
+# Update xray-core
 XRAY_VLESS='['; XRAY_VLESS_NF='['; XRAY_TROJAN='['; XRAY_VMESS='['
 for i in "${!UUIDS[@]}"; do
     U="${UUIDS[$i]}"
@@ -708,31 +522,19 @@ jq --argjson vc "$XRAY_VLESS" --argjson vn "$XRAY_VLESS_NF" \
    )' "${CONFIG_DIR}/xray.json" > "$TMP" && mv "$TMP" "${CONFIG_DIR}/xray.json"
 killall -SIGHUP xray 2>/dev/null || systemctl restart xray 2>/dev/null || true
 
-# ---- 更新 Hysteria2 (userpass) ----
+# Update Hysteria2
 for CFG in hy2.yaml hy2-obfs.yaml hy2-warp.yaml hy2-obfs-warp.yaml; do
     F="${CONFIG_DIR}/${CFG}"
     [[ -f "$F" ]] || continue
-    # 重建 userpass 部分
-    USERPASS=""
+    USERPASS_LINES=""
     for U in "${UUIDS[@]}"; do
-        USERPASS+="    ${U}: ${U}"$'\n'
+        USERPASS_LINES+="    ${U}: ${U}\n"
     done
-    # �?sed 替换空的 userpass
-    python3 -c "
-import yaml, sys
-with open('$F') as f: c = yaml.safe_load(f)
-c['auth']['userpass'] = {u: u for u in sys.argv[1:]}
-with open('$F', 'w') as f: yaml.dump(c, f, default_flow_style=False)
-" "${UUIDS[@]}" 2>/dev/null || true
+    sed -i "s|  userpass: {}|  userpass:\n${USERPASS_LINES}|" "$F" 2>/dev/null || true
 done
+systemctl restart hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp 2>/dev/null || true
 
-# 重启 hysteria2 实例
-systemctl restart hy2-direct 2>/dev/null || true
-systemctl restart hy2-obfs-direct 2>/dev/null || true
-systemctl restart hy2-warp 2>/dev/null || true
-systemctl restart hy2-obfs-warp 2>/dev/null || true
-
-# ---- 更新 TUIC (users) ----
+# Update TUIC
 for CFG in tuic.json tuic-warp.json; do
     F="${CONFIG_DIR}/${CFG}"
     [[ -f "$F" ]] || continue
@@ -745,33 +547,27 @@ for CFG in tuic.json tuic-warp.json; do
     TUIC_USERS+="}"
     jq --argjson u "$TUIC_USERS" '.users = $u' "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
 done
-systemctl restart tuic-direct 2>/dev/null || true
-systemctl restart tuic-warp 2>/dev/null || true
+systemctl restart tuic-direct tuic-warp 2>/dev/null || true
 
-echo "[$(date)] 同步完成"
+echo "[$(date)] Sync complete"
 SYNCEOF
 
 chmod +x "${CONFIG_DIR}/sync_users.sh"
 
-# Cron
 CRON_LINE="* * * * * ${CONFIG_DIR}/sync_users.sh >> /var/log/xboard-sync.log 2>&1"
 (crontab -l 2>/dev/null | grep -v 'sync_users.sh'; echo "$CRON_LINE") | crontab -
-echo -e "  ${GREEN}�?同步脚本 + Cron 就绪${NC}"
+echo -e "  ${GREEN}OK${NC}"
 
-# ============================================================
-# Step 12: systemd 服务 + 防火�?+ 启动
-# ============================================================
-echo -e "${BLUE}[13/13] 启动全部服务 ...${NC}"
+# [13/13] Firewall + systemd + start
+echo -e "${BLUE}[13/13] Starting all services ...${NC}"
 
-# 防火�?for port in "${ALL_PORTS[@]}"; do
+for port in "${ALL_PORTS[@]}"; do
     iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
     iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
 done
-echo -e "  ${GREEN}�?防火�?${#ALL_PORTS[@]} 端口${NC}"
 
-# --- xray systemd ---
 mkdir -p /etc/systemd/system/xray.service.d
 cat > /etc/systemd/system/xray.service.d/override.conf << EOF
 [Service]
@@ -779,7 +575,6 @@ ExecStart=
 ExecStart=/usr/local/bin/xray run -config ${CONFIG_DIR}/xray.json
 EOF
 
-# --- hysteria2 services ---
 for INST in "hy2-direct:hy2.yaml" "hy2-obfs-direct:hy2-obfs.yaml" "hy2-warp:hy2-warp.yaml" "hy2-obfs-warp:hy2-obfs-warp.yaml"; do
     NAME="${INST%%:*}"; CFG="${INST##*:}"
 cat > "/etc/systemd/system/${NAME}.service" << EOF
@@ -795,7 +590,6 @@ WantedBy=multi-user.target
 EOF
 done
 
-# --- TUIC services ---
 for INST in "tuic-direct:tuic.json" "tuic-warp:tuic-warp.json"; do
     NAME="${INST%%:*}"; CFG="${INST##*:}"
 cat > "/etc/systemd/system/${NAME}.service" << EOF
@@ -811,7 +605,6 @@ WantedBy=multi-user.target
 EOF
 done
 
-# --- SS-Rust service ---
 cat > /etc/systemd/system/ssserver.service << EOF
 [Unit]
 Description=Shadowsocks-Rust
@@ -824,11 +617,10 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# --- NaïveProxy service ---
 if [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]]; then
 cat > /etc/systemd/system/naive.service << EOF
 [Unit]
-Description=NaiveProxy (caddy-naive)
+Description=NaiveProxy
 After=network.target
 [Service]
 ExecStart=${NAIVE_BIN} run --config ${CONFIG_DIR}/naive.json
@@ -841,11 +633,10 @@ fi
 
 systemctl daemon-reload
 
-# 启动
 SERVICES=(xray hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp tuic-direct tuic-warp ssserver)
 [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]] && SERVICES+=(naive)
 
-# 先同步用�?"${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
+"${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
 
 for SVC in "${SERVICES[@]}"; do
     systemctl enable "$SVC" 2>/dev/null || true
@@ -855,19 +646,19 @@ done
 sleep 2
 
 echo ""
-echo -e "${GREEN}╔═══════════════════════════════════════════════════════�?{NC}"
-echo -e "${GREEN}�?                   部署完成�?                         �?{NC}"
-echo -e "${GREEN}╠═══════════════════════════════════════════════════════�?{NC}"
-for SVC in "${SERVICES[@]}"; do
+echo -e "${GREEN}=======================================================${NC}"
+echo -e "${GREEN}  Deployment Complete!${NC}"
+echo -e "${GREEN}=======================================================${NC}"
+for SVC in xboard-node "${SERVICES[@]}"; do
     if systemctl is-active --quiet "$SVC" 2>/dev/null; then
-        echo -e "${GREEN}�? ${SVC}: �?运行�?{NC}"
+        echo -e "  ${GREEN}[OK] ${SVC}${NC}"
     else
-        echo -e "${RED}�? ${SVC}: �?异常 (journalctl -u ${SVC})${NC}"
+        echo -e "  ${RED}[FAIL] ${SVC} (journalctl -u ${SVC})${NC}"
     fi
 done
-echo -e "${GREEN}╠═══════════════════════════════════════════════════════�?{NC}"
-echo -e "${GREEN}�? 配置: ${CONFIG_DIR}${NC}"
-echo -e "${GREEN}�? 同步: 每分钟自动拉取用�?{NC}"
-echo -e "${GREEN}�? 日志: /var/log/xboard-sync.log${NC}"
-echo -e "${GREEN}╚═══════════════════════════════════════════════════════�?{NC}"
+echo -e "${GREEN}------------------------------------------------------${NC}"
+echo -e "  Config: ${CONFIG_DIR}"
+echo -e "  Sync:   Every minute (cron)"
+echo -e "  Log:    /var/log/xboard-sync.log"
+echo -e "${GREEN}=======================================================${NC}"
 echo ""
