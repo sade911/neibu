@@ -249,6 +249,65 @@ class MachineController extends Controller
         return $this->success(NodePresetService::getAvailablePresets());
     }
 
+    /**
+     * 一键设置权限组：为机器下所有节点批量分配权限组
+     */
+    public function batchSetGroup(Request $request)
+    {
+        $params = $request->validate([
+            'machine_id' => 'required|integer|exists:v2_server_machine,id',
+            'group_ids' => 'required|array|min:1',
+            'group_ids.*' => 'integer|exists:v2_server_group,id',
+            'mode' => 'nullable|string|in:replace,merge',
+        ]);
+
+        $mode = $params['mode'] ?? 'replace';
+        $groupIds = array_map('strval', $params['group_ids']);
+
+        $nodes = Server::where('machine_id', $params['machine_id'])->get();
+
+        if ($nodes->isEmpty()) {
+            return $this->fail([422, '该机器下没有节点']);
+        }
+
+        $updated = 0;
+        foreach ($nodes as $node) {
+            if ($mode === 'merge') {
+                $existing = $node->group_ids ?? [];
+                $merged = array_unique(array_merge($existing, $groupIds));
+                $node->update(['group_ids' => array_values($merged)]);
+            } else {
+                $node->update(['group_ids' => $groupIds]);
+            }
+            $updated++;
+        }
+
+        return $this->success([
+            'updated' => $updated,
+            'group_ids' => $groupIds,
+            'mode' => $mode,
+        ]);
+    }
+
+    /**
+     * 一键显示/隐藏：批量设置机器下所有节点的可见状态
+     */
+    public function batchToggleShow(Request $request)
+    {
+        $params = $request->validate([
+            'machine_id' => 'required|integer|exists:v2_server_machine,id',
+            'show' => 'required|boolean',
+        ]);
+
+        $updated = Server::where('machine_id', $params['machine_id'])
+            ->update(['show' => $params['show'] ? 1 : 0]);
+
+        return $this->success([
+            'updated' => $updated,
+            'show' => (bool) $params['show'],
+        ]);
+    }
+
     private function buildInstallCommand(Request $request, ServerMachine $machine): string
     {
         $panelUrl = rtrim((string) (admin_setting('app_url') ?: $request->getSchemeAndHttpHost()), '/');

@@ -110,6 +110,8 @@ class AdminRoute
                 $router->get('/history', [MachineController::class, 'history']);
                 $router->post('/setupPresets', [MachineController::class, 'setupPresets']);
                 $router->get('/presets', [MachineController::class, 'presets']);
+                $router->post('/batchSetGroup', [MachineController::class, 'batchSetGroup']);
+                $router->post('/batchToggleShow', [MachineController::class, 'batchToggleShow']);
             });
 
             // Order
