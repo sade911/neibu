@@ -14,7 +14,7 @@
 #   bash setup.sh --domain panel.example.com --db-pass MyDBPass123
 #
 
-set -euo pipefail
+set -uo pipefail
 
 # ============================================================
 # 颜色定义
@@ -42,6 +42,8 @@ PHP_BIN="/www/server/php/${PHP_VERSION}/bin/php"
 GIT_REPO="https://github.com/sade911/xinbanmianban.git"
 ENABLE_OCTANE=true
 ENABLE_WEBSOCKET=true
+ADMIN_EMAIL=""
+ADMIN_PASS=""
 
 # ============================================================
 # 工具函数
@@ -49,16 +51,17 @@ ENABLE_WEBSOCKET=true
 log_info()    { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
-log_step()    { echo -e "\n${CYAN}${BOLD}▶ $1${NC}\n"; }
+log_step()    { echo -e "\n${CYAN}${BOLD}══════════════════════════════════════${NC}"; echo -e "${CYAN}${BOLD}▶ $1${NC}"; echo -e "${CYAN}${BOLD}══════════════════════════════════════${NC}\n"; }
 log_success() { echo -e "${GREEN}${BOLD}✓ $1${NC}"; }
 
 generate_password() {
-    openssl rand -base64 24 | tr -d '/+=' | head -c 20
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 2>/dev/null || openssl rand -hex 8
 }
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_error "请使用 root 用户运行此脚本"
+        log_error "请执行: sudo bash setup.sh"
         exit 1
     fi
 }
@@ -78,12 +81,13 @@ detect_os() {
             PKG_MANAGER="apt-get"
             PKG_UPDATE="apt-get update -y"
             ;;
-        centos|rocky|almalinux|fedora)
+        centos|rocky|almalinux|fedora|rhel)
             PKG_MANAGER="yum"
-            PKG_UPDATE="yum makecache"
+            PKG_UPDATE="yum makecache -y"
             ;;
         *)
             log_error "不支持的操作系统: $OS"
+            log_error "支持: Ubuntu 20.04+, Debian 10+, CentOS Stream 8+"
             exit 1
             ;;
     esac
@@ -145,20 +149,21 @@ interactive_input() {
 
     if [[ -z "$DB_PASS" ]]; then
         DB_PASS=$(generate_password)
-        log_info "自动生成数据库密码: ${DB_PASS}"
     fi
 
     SITE_DIR="/www/wwwroot/${DOMAIN}"
 
     echo ""
-    echo -e "${BLUE}部署配置:${NC}"
-    echo -e "  域名:          ${GREEN}${DOMAIN}${NC}"
-    echo -e "  站点目录:      ${GREEN}${SITE_DIR}${NC}"
-    echo -e "  数据库:        ${GREEN}${DB_NAME}${NC}"
-    echo -e "  数据库用户:    ${GREEN}${DB_USER}${NC}"
-    echo -e "  Octane:        ${GREEN}${ENABLE_OCTANE}${NC}"
-    echo -e "  WebSocket:     ${GREEN}${ENABLE_WEBSOCKET}${NC}"
-    echo -e "  仓库地址:      ${GREEN}${GIT_REPO}${NC}"
+    echo -e "${BLUE}┌─────────── 部署配置 ───────────┐${NC}"
+    echo -e "${BLUE}│${NC}  域名:          ${GREEN}${DOMAIN}${NC}"
+    echo -e "${BLUE}│${NC}  站点目录:      ${GREEN}${SITE_DIR}${NC}"
+    echo -e "${BLUE}│${NC}  数据库名:      ${GREEN}${DB_NAME}${NC}"
+    echo -e "${BLUE}│${NC}  数据库用户:    ${GREEN}${DB_USER}${NC}"
+    echo -e "${BLUE}│${NC}  数据库密码:    ${GREEN}${DB_PASS}${NC}"
+    echo -e "${BLUE}│${NC}  Octane 加速:   ${GREEN}${ENABLE_OCTANE}${NC}"
+    echo -e "${BLUE}│${NC}  WebSocket:     ${GREEN}${ENABLE_WEBSOCKET}${NC}"
+    echo -e "${BLUE}│${NC}  Git 仓库:      ${GREEN}${GIT_REPO}${NC}"
+    echo -e "${BLUE}└────────────────────────────────┘${NC}"
     echo ""
 
     read -rp "$(echo -e "${YELLOW}确认以上配置开始安装? (y/n): ${NC}")" confirm
@@ -174,8 +179,15 @@ interactive_input() {
 install_base_deps() {
     log_step "Step 1/9: 安装基础依赖"
 
-    $PKG_UPDATE > /dev/null 2>&1
-    $PKG_MANAGER install -y curl wget git unzip socat cron > /dev/null 2>&1 || true
+    $PKG_UPDATE > /dev/null 2>&1 || true
+
+    if [[ "$PKG_MANAGER" == "apt-get" ]]; then
+        apt-get install -y curl wget git unzip socat cron lsof > /dev/null 2>&1 || true
+    else
+        yum install -y curl wget git unzip socat cronie lsof > /dev/null 2>&1 || true
+        systemctl enable crond > /dev/null 2>&1 || true
+        systemctl start crond > /dev/null 2>&1 || true
+    fi
 
     log_success "基础依赖安装完成"
 }
@@ -188,68 +200,101 @@ install_aapanel() {
 
     if [[ -f "/etc/init.d/bt" ]]; then
         log_info "aaPanel 已安装，跳过"
+        # 确保宝塔服务正在运行
+        /etc/init.d/bt start > /dev/null 2>&1 || true
         return
     fi
 
-    log_info "正在下载并安装 aaPanel ..."
-    if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
-        URL="https://www.aapanel.com/script/install_7.0_en.sh"
-    else
-        URL="https://www.aapanel.com/script/install_7.0_en.sh"
-    fi
+    log_info "正在下载并安装 aaPanel (约需 1-3 分钟) ..."
 
+    local INSTALL_SCRIPT="install_7.0_en.sh"
+    local URL="https://www.aapanel.com/script/${INSTALL_SCRIPT}"
+
+    cd /tmp
     if command -v curl &> /dev/null; then
         curl -ksSO "$URL"
     else
-        wget --no-check-certificate -O install_7.0_en.sh "$URL"
+        wget --no-check-certificate -O "${INSTALL_SCRIPT}" "$URL"
     fi
 
-    echo "y" | bash install_7.0_en.sh aapanel
+    echo "y" | bash "${INSTALL_SCRIPT}" aapanel
+    rm -f "${INSTALL_SCRIPT}"
 
     log_success "aaPanel 安装完成"
+    log_info "aaPanel 面板信息:"
+    bt default 2>/dev/null || true
 }
 
 # ============================================================
 # Step 3: 安装 LNMP 环境
 # ============================================================
 install_lnmp() {
-    log_step "Step 3/9: 安装 LNMP 环境 (Nginx + MySQL + PHP 8.2 + Redis)"
+    log_step "Step 3/9: 安装 LNMP 环境"
 
-    # 安装 Nginx
-    if [[ ! -d "/www/server/nginx" ]]; then
-        log_info "安装 Nginx ..."
-        bt 14 > /dev/null 2>&1 || {
-            /etc/init.d/bt restart
-            sleep 3
+    # --- Nginx ---
+    if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
+        log_info "Nginx 已安装 ✓"
+    else
+        log_info "安装 Nginx (约需 2-5 分钟) ..."
+        # 使用宝塔命令行安装 Nginx
+        /www/server/panel/install/install_soft.sh 0 install nginx 1.24 > /dev/null 2>&1 || {
+            log_warn "宝塔命令安装 Nginx 失败，尝试通过面板 API ..."
             bt 14 > /dev/null 2>&1 || true
         }
-    else
-        log_info "Nginx 已安装，跳过"
+        if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
+            log_success "Nginx 安装成功"
+        else
+            log_warn "Nginx 可能安装失败，请在 aaPanel 面板中手动安装"
+        fi
     fi
 
-    # 安装 MySQL 5.7
-    if [[ ! -d "/www/server/mysql" ]]; then
-        log_info "安装 MySQL 5.7 (编译安装，约需 10-30 分钟) ..."
-        bt 3 > /dev/null 2>&1 || true
+    # --- MySQL 5.7 ---
+    if [[ -f "/www/server/mysql/bin/mysql" ]]; then
+        log_info "MySQL 已安装 ✓"
     else
-        log_info "MySQL 已安装，跳过"
+        log_info "安装 MySQL 5.7 (编译安装，约需 15-40 分钟，请耐心等待) ..."
+        /www/server/panel/install/install_soft.sh 0 install mysql 5.7 > /dev/null 2>&1 || {
+            bt 3 > /dev/null 2>&1 || true
+        }
+        if [[ -f "/www/server/mysql/bin/mysql" ]]; then
+            log_success "MySQL 安装成功"
+        else
+            log_warn "MySQL 可能安装失败，请在 aaPanel 面板中手动安装"
+        fi
     fi
 
-    # 安装 PHP 8.2
-    if [[ ! -d "/www/server/php/${PHP_VERSION}" ]]; then
-        log_info "安装 PHP 8.2 (编译安装，约需 10-20 分钟) ..."
-        bt 8 > /dev/null 2>&1 || true
+    # --- PHP 8.2 ---
+    if [[ -f "${PHP_BIN}" ]]; then
+        log_info "PHP 8.2 已安装 ✓"
     else
-        log_info "PHP 8.2 已安装，跳过"
+        log_info "安装 PHP 8.2 (编译安装，约需 10-30 分钟，请耐心等待) ..."
+        /www/server/panel/install/install_soft.sh 0 install php 8.2 > /dev/null 2>&1 || {
+            bt 8 > /dev/null 2>&1 || true
+        }
+        if [[ -f "${PHP_BIN}" ]]; then
+            log_success "PHP 8.2 安装成功"
+        else
+            log_error "PHP 8.2 安装失败！请在 aaPanel 面板中手动安装 PHP 8.2 后重新运行脚本"
+            exit 1
+        fi
     fi
 
-    # 安装 Redis
-    if ! command -v redis-server &> /dev/null && [[ ! -f "/www/server/redis/bin/redis-server" ]]; then
-        log_info "安装 Redis ..."
-        bt 18 > /dev/null 2>&1 || true
+    # --- Redis ---
+    if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
+        log_info "Redis 已安装 ✓"
     else
-        log_info "Redis 已安装，跳过"
+        log_info "安装 Redis (约需 1-3 分钟) ..."
+        /www/server/panel/install/install_soft.sh 0 install redis 7.0 > /dev/null 2>&1 || {
+            bt 18 > /dev/null 2>&1 || true
+        }
+        log_success "Redis 安装完成"
     fi
+
+    # 确保服务都在运行
+    /etc/init.d/nginx start > /dev/null 2>&1 || true
+    /etc/init.d/mysqld start > /dev/null 2>&1 || true
+    /etc/init.d/redis start > /dev/null 2>&1 || true
+    /etc/init.d/php-fpm-${PHP_VERSION} start > /dev/null 2>&1 || true
 
     log_success "LNMP 环境安装完成"
 }
@@ -260,99 +305,115 @@ install_lnmp() {
 configure_php() {
     log_step "Step 4/9: 配置 PHP 8.2 扩展和函数"
 
-    local PHP_EXT_DIR="/www/server/php/${PHP_VERSION}/lib/php/extensions"
     local PHP_INI="/www/server/php/${PHP_VERSION}/etc/php.ini"
+    local PHP_EXT_SCRIPT="/www/server/panel/install/install_soft.sh"
 
     # 安装必要扩展
-    local extensions=("redis" "fileinfo" "swoole" "readline" "event")
+    local extensions=("redis" "fileinfo" "swoole4" "event")
     for ext in "${extensions[@]}"; do
-        if ! ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext}$"; then
-            log_info "安装 PHP 扩展: ${ext} ..."
-            /www/server/php/${PHP_VERSION}/bin/pecl install "${ext}" > /dev/null 2>&1 || {
-                # 使用宝塔的方式安装
-                bt_install_php_ext "${ext}" || true
-            }
+        local ext_check="${ext}"
+        [[ "$ext" == "swoole4" ]] && ext_check="swoole"
+
+        if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+            log_info "PHP 扩展 ${ext_check} 已安装 ✓"
         else
-            log_info "PHP 扩展 ${ext} 已安装"
+            log_info "安装 PHP 扩展: ${ext} ..."
+            # 宝塔安装 PHP 扩展
+            if [[ -f "$PHP_EXT_SCRIPT" ]]; then
+                bash "$PHP_EXT_SCRIPT" 1 install "${ext}" "${PHP_VERSION}" > /dev/null 2>&1 || true
+            fi
+            # 备用: pecl
+            if ! ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+                /www/server/php/${PHP_VERSION}/bin/pecl install "${ext_check}" > /dev/null 2>&1 || true
+            fi
         fi
     done
 
     # 解禁 PHP 函数
-    local functions=("putenv" "proc_open" "pcntl_alarm" "pcntl_signal" "pcntl_signal_dispatch" "pcntl_async_signals")
     if [[ -f "$PHP_INI" ]]; then
-        for func in "${functions[@]}"; do
-            if grep -q "disable_functions.*${func}" "$PHP_INI"; then
-                sed -i "s/${func},\?//g" "$PHP_INI"
-                log_info "已解禁 PHP 函数: ${func}"
-            fi
+        log_info "解禁必要的 PHP 函数 ..."
+        local functions_to_enable=("putenv" "proc_open" "pcntl_alarm" "pcntl_signal" "pcntl_signal_dispatch" "pcntl_async_signals" "pcntl_wait" "pcntl_wifexited" "pcntl_wifstopped" "pcntl_wifsignaled" "pcntl_wexitstatus" "pcntl_wtermsig" "pcntl_wstopsig" "pcntl_exec")
+
+        for func in "${functions_to_enable[@]}"; do
+            sed -i "s/,${func}//g; s/${func},//g; s/${func}//g" "$PHP_INI"
         done
+
         # 清理 disable_functions 中多余的逗号
-        sed -i 's/,,*/,/g; s/,$//' "$PHP_INI"
-        sed -i 's/disable_functions = ,/disable_functions = /' "$PHP_INI"
+        sed -i 's/,,*/,/g; s/disable_functions\s*=\s*,/disable_functions = /' "$PHP_INI"
+        sed -i 's/,\s*$//' "$PHP_INI"
     fi
 
-    # 重启 PHP
+    # 重启 PHP-FPM
     /etc/init.d/php-fpm-${PHP_VERSION} restart > /dev/null 2>&1 || true
 
     log_success "PHP 8.2 配置完成"
-}
-
-bt_install_php_ext() {
-    local ext=$1
-    # 宝塔 API 安装扩展
-    local bt_api="/www/server/panel/class/panelPlugin.py"
-    if [[ -f "$bt_api" ]]; then
-        python3 /www/server/panel/class/panelPlugin.py install_ext "${PHP_VERSION}" "${ext}" > /dev/null 2>&1 || true
-    fi
 }
 
 # ============================================================
 # Step 5: 创建数据库
 # ============================================================
 setup_database() {
-    log_step "Step 5/9: 创建数据库"
+    log_step "Step 5/9: 创建 MySQL 数据库"
 
-    local MYSQL_CMD="mysql"
-    if [[ -f "/www/server/mysql/bin/mysql" ]]; then
-        MYSQL_CMD="/www/server/mysql/bin/mysql"
+    local MYSQL_CMD="/www/server/mysql/bin/mysql"
+    if [[ ! -f "$MYSQL_CMD" ]]; then
+        MYSQL_CMD=$(command -v mysql 2>/dev/null || echo "mysql")
     fi
 
-    # 获取 MySQL root 密码
+    # 获取 MySQL root 密码 (宝塔存储位置)
     local MYSQL_ROOT_PASS=""
-    if [[ -f "/www/server/panel/data/default.db" ]]; then
-        MYSQL_ROOT_PASS=$(bt 14 2>/dev/null | grep -oP 'password:\s*\K.*' || echo "")
-    fi
-
-    # 尝试从宝塔配置获取
-    if [[ -z "$MYSQL_ROOT_PASS" && -f "/www/server/panel/data/default.pl" ]]; then
+    if [[ -f "/www/server/panel/data/default.pl" ]]; then
         MYSQL_ROOT_PASS=$(cat /www/server/panel/data/default.pl 2>/dev/null || echo "")
     fi
 
-    # 创建数据库和用户
     log_info "创建数据库 ${DB_NAME} 和用户 ${DB_USER} ..."
 
-    $MYSQL_CMD -u root ${MYSQL_ROOT_PASS:+-p"$MYSQL_ROOT_PASS"} -e "
-        CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-        CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-        GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
-        FLUSH PRIVILEGES;
-    " 2>/dev/null || {
-        log_warn "通过命令行创建数据库失败，尝试直接连接 ..."
-        $MYSQL_CMD -u root -e "
+    local mysql_success=false
+
+    # 尝试带密码连接
+    if [[ -n "$MYSQL_ROOT_PASS" ]]; then
+        $MYSQL_CMD -u root -p"${MYSQL_ROOT_PASS}" -e "
             CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-            CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+            DROP USER IF EXISTS '${DB_USER}'@'localhost';
+            CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
             GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
             FLUSH PRIVILEGES;
-        " 2>/dev/null || {
-            log_error "无法创建数据库，请手动在 aaPanel 面板中创建:"
-            log_error "  数据库名: ${DB_NAME}"
-            log_error "  用户名: ${DB_USER}"
-            log_error "  密码: ${DB_PASS}"
-            read -rp "$(echo -e "${YELLOW}手动创建完成后按 Enter 继续 ...${NC}")"
-        }
-    }
+        " 2>/dev/null && mysql_success=true
+    fi
 
-    log_success "数据库配置完成"
+    # 尝试无密码连接
+    if [[ "$mysql_success" == "false" ]]; then
+        $MYSQL_CMD -u root -e "
+            CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DROP USER IF EXISTS '${DB_USER}'@'localhost';
+            CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+            GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
+            FLUSH PRIVILEGES;
+        " 2>/dev/null && mysql_success=true
+    fi
+
+    # 尝试 socket 连接
+    if [[ "$mysql_success" == "false" ]]; then
+        $MYSQL_CMD -u root --socket=/tmp/mysql.sock -e "
+            CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            DROP USER IF EXISTS '${DB_USER}'@'localhost';
+            CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+            GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
+            FLUSH PRIVILEGES;
+        " 2>/dev/null && mysql_success=true
+    fi
+
+    if [[ "$mysql_success" == "false" ]]; then
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_error "无法自动创建数据库！请在 aaPanel 面板中手动创建:"
+        log_error "  数据库名: ${DB_NAME}"
+        log_error "  用户名:   ${DB_USER}"
+        log_error "  密码:     ${DB_PASS}"
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        read -rp "$(echo -e "${YELLOW}手动创建完成后按 Enter 继续 ...${NC}")"
+    else
+        log_success "数据库创建成功"
+    fi
 }
 
 # ============================================================
@@ -374,32 +435,32 @@ deploy_xboard() {
     # 克隆代码
     if [[ -d ".git" ]]; then
         log_info "代码已存在，拉取最新版本 ..."
-        git fetch --all
-        git reset --hard origin/master
-        git pull origin master
+        git fetch --all 2>&1
+        git reset --hard origin/master 2>&1
+        git pull origin master 2>&1
     else
         log_info "克隆仓库: ${GIT_REPO} ..."
-        git clone "${GIT_REPO}" ./
+        git clone "${GIT_REPO}" ./ 2>&1
     fi
 
-    # 安装 Composer
-    log_info "安装 Composer 依赖 ..."
-    rm -rf composer.phar 2>/dev/null || true
+    # 安装 Composer 依赖
+    log_info "安装 Composer 依赖 (约需 1-3 分钟) ..."
+    rm -f composer.phar
     wget -q https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
-    ${PHP_BIN} composer.phar install --no-dev --optimize-autoloader -q 2>&1 || {
-        ${PHP_BIN} composer.phar install -q 2>&1
+    ${PHP_BIN} composer.phar install --no-dev --optimize-autoloader --no-interaction 2>&1 || {
+        log_warn "优化模式失败，尝试标准安装 ..."
+        ${PHP_BIN} composer.phar install --no-interaction 2>&1
     }
 
-    # 初始化 Git 子模块 (主题)
-    log_info "初始化主题 ..."
-    git submodule update --init --recursive --force
+    # 初始化 Git 子模块 (前端主题)
+    log_info "初始化前端主题 ..."
+    git submodule update --init --recursive --force 2>&1
 
-    # 配置 .env
-    if [[ ! -f ".env" ]] || ! grep -q "INSTALLED" .env 2>/dev/null; then
-        log_info "配置环境变量 ..."
-        cp .env.example .env 2>/dev/null || touch .env
-
-        # 写入环境配置
+    # 检查是否已安装过
+    if [[ -f ".env" ]] && grep -q "INSTALLED=true" .env 2>/dev/null; then
+        log_info "Xboard 已安装过，跳过初始化"
+    else
+        log_info "写入环境配置 .env ..."
         cat > .env << ENVEOF
 APP_NAME=Xboard
 APP_ENV=production
@@ -408,6 +469,7 @@ APP_DEBUG=false
 APP_URL=https://${DOMAIN}
 
 LOG_CHANNEL=daily
+LOG_LEVEL=warning
 
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
@@ -424,33 +486,54 @@ BROADCAST_DRIVER=log
 CACHE_DRIVER=redis
 SESSION_DRIVER=redis
 QUEUE_CONNECTION=redis
+
+OCTANE_SERVER=swoole
 ENVEOF
 
         # 生成 APP_KEY
-        ${PHP_BIN} artisan key:generate --force
+        log_info "生成应用密钥 ..."
+        ${PHP_BIN} artisan key:generate --force 2>&1
 
-        # 执行安装
-        log_info "初始化数据库 ..."
-        ${PHP_BIN} artisan migrate --force
+        # 数据库迁移
+        log_info "初始化数据库结构 (迁移) ..."
+        ${PHP_BIN} artisan migrate --force 2>&1
 
-        # 创建管理员
-        local ADMIN_EMAIL="admin@${DOMAIN}"
-        local ADMIN_PASS=$(generate_password)
+        # 生成管理员账号
+        ADMIN_EMAIL="admin@${DOMAIN}"
+        ADMIN_PASS=$(generate_password)
 
-        ${PHP_BIN} artisan xboard:install <<< "$(printf "mysql\n127.0.0.1\n3306\n${DB_NAME}\n${DB_USER}\n${DB_PASS}\n127.0.0.1\n6379\n${REDIS_PASS}\n${ADMIN_EMAIL}\n")" 2>/dev/null || {
-            log_warn "自动安装失败，你可以稍后手动运行: cd ${SITE_DIR} && php artisan xboard:install"
+        log_info "创建管理员账号 ..."
+        # 直接通过 tinker 创建管理员 (避免 xboard:install 交互问题)
+        ${PHP_BIN} artisan tinker --execute="
+            \$user = new \App\Models\User();
+            \$user->email = '${ADMIN_EMAIL}';
+            \$user->password = password_hash('${ADMIN_PASS}', PASSWORD_DEFAULT);
+            \$user->uuid = \App\Utils\Helper::guid(true);
+            \$user->token = \App\Utils\Helper::guid();
+            \$user->is_admin = 1;
+            \$user->save();
+            echo 'Admin created: ${ADMIN_EMAIL}';
+        " 2>&1 || {
+            log_warn "自动创建管理员失败，请稍后手动运行:"
+            log_warn "  cd ${SITE_DIR} && ${PHP_BIN} artisan xboard:install"
         }
 
+        # 标记已安装
+        echo "" >> .env
         echo "INSTALLED=true" >> .env
-    else
-        log_info "Xboard 已安装，跳过初始化"
+
+        # 缓存配置
+        ${PHP_BIN} artisan config:cache 2>/dev/null || true
+
+        log_success "管理员账号: ${ADMIN_EMAIL}"
+        log_success "管理员密码: ${ADMIN_PASS}"
     fi
 
-    # 设置权限
+    # 设置文件权限
     chown -R www:www "${SITE_DIR}"
     chmod -R 755 "${SITE_DIR}"
-    chmod -R 777 "${SITE_DIR}/storage"
-    chmod -R 777 "${SITE_DIR}/bootstrap/cache"
+    chmod -R 775 "${SITE_DIR}/storage"
+    chmod -R 775 "${SITE_DIR}/bootstrap/cache"
 
     log_success "Xboard 代码部署完成"
 }
@@ -463,102 +546,120 @@ configure_nginx() {
 
     local NGINX_CONF_DIR="/www/server/panel/vhost/nginx"
     local NGINX_CONF="${NGINX_CONF_DIR}/${DOMAIN}.conf"
+    local CERT_DIR="/www/server/panel/vhost/cert/${DOMAIN}"
 
     mkdir -p "${NGINX_CONF_DIR}"
+    mkdir -p "${CERT_DIR}"
+
+    # 先生成自签证书 (确保 Nginx 能启动)
+    if [[ ! -f "${CERT_DIR}/fullchain.pem" ]]; then
+        log_info "生成临时 SSL 证书 ..."
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout "${CERT_DIR}/privkey.pem" \
+            -out "${CERT_DIR}/fullchain.pem" \
+            -subj "/CN=${DOMAIN}" 2>/dev/null
+    fi
 
     if [[ "$ENABLE_OCTANE" == "true" ]]; then
-        # Octane 模式的 Nginx 配置
-        cat > "${NGINX_CONF}" << 'NGINXEOF'
+        # =============== Octane 模式 ===============
+        cat > "${NGINX_CONF}" << NGINXEOF
 server {
     listen 80;
     listen [::]:80;
+    server_name ${DOMAIN};
+
+    # 强制 HTTPS
+    return 301 https://\$host\$request_uri;
+}
+
+server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name DOMAIN_PLACEHOLDER;
-    index index.php index.html;
-    root SITE_DIR_PLACEHOLDER/public;
+    server_name ${DOMAIN};
+    root ${SITE_DIR}/public;
 
-    # SSL 证书 (使用宝塔自签或 Let's Encrypt)
-    ssl_certificate    /www/server/panel/vhost/cert/DOMAIN_PLACEHOLDER/fullchain.pem;
-    ssl_certificate_key    /www/server/panel/vhost/cert/DOMAIN_PLACEHOLDER/privkey.pem;
+    ssl_certificate     ${CERT_DIR}/fullchain.pem;
+    ssl_certificate_key ${CERT_DIR}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256:EECDH+3DES:RSA+3DES:!MD5;
+    ssl_ciphers EECDH+CHACHA20:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256:!MD5;
     ssl_prefer_server_ciphers on;
     ssl_session_timeout 10m;
     ssl_session_cache shared:SSL:10m;
-
-    # 强制 HTTPS
-    if ($server_port !~ 443) {
-        rewrite ^(/.*)$ https://$host$1 permanent;
-    }
 
     # WebSocket 代理
     location /ws/ {
         proxy_pass http://127.0.0.1:8076;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 60s;
     }
 
     # 静态文件直接返回
     location ~* \.(jpg|jpeg|png|gif|js|css|svg|woff2|woff|ttf|eot|wasm|json|ico)$ {
-        expires 1h;
+        expires 7d;
         access_log off;
+        try_files \$uri =404;
     }
 
-    # Octane 代理
-    location ~ .* {
+    # Octane 代理 (所有其他请求)
+    location / {
         proxy_pass http://127.0.0.1:7010;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Real-PORT $remote_port;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header Host $http_host;
-        proxy_set_header Scheme $scheme;
-        proxy_set_header Server-Protocol $server_protocol;
-        proxy_set_header Server-Name $server_name;
-        proxy_set_header Server-Addr $server_addr;
-        proxy_set_header Server-Port $server_port;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Real-PORT \$remote_port;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header Host \$http_host;
+        proxy_set_header Scheme \$scheme;
+        proxy_set_header Server-Protocol \$server_protocol;
+        proxy_set_header Server-Name \$server_name;
+        proxy_set_header Server-Addr \$server_addr;
+        proxy_set_header Server-Port \$server_port;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    access_log  /www/wwwlogs/DOMAIN_PLACEHOLDER.log;
-    error_log   /www/wwwlogs/DOMAIN_PLACEHOLDER.error.log;
+    access_log /www/wwwlogs/${DOMAIN}.log;
+    error_log  /www/wwwlogs/${DOMAIN}.error.log;
 }
 NGINXEOF
     else
-        # PHP-FPM 模式的 Nginx 配置
-        cat > "${NGINX_CONF}" << 'NGINXEOF'
+        # =============== PHP-FPM 模式 ===============
+        cat > "${NGINX_CONF}" << NGINXEOF
 server {
     listen 80;
     listen [::]:80;
+    server_name ${DOMAIN};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name DOMAIN_PLACEHOLDER;
+    server_name ${DOMAIN};
     index index.php index.html;
-    root SITE_DIR_PLACEHOLDER/public;
+    root ${SITE_DIR}/public;
 
-    ssl_certificate    /www/server/panel/vhost/cert/DOMAIN_PLACEHOLDER/fullchain.pem;
-    ssl_certificate_key    /www/server/panel/vhost/cert/DOMAIN_PLACEHOLDER/privkey.pem;
+    ssl_certificate     ${CERT_DIR}/fullchain.pem;
+    ssl_certificate_key ${CERT_DIR}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256:EECDH+3DES:RSA+3DES:!MD5;
+    ssl_ciphers EECDH+CHACHA20:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256:!MD5;
     ssl_prefer_server_ciphers on;
-
-    if ($server_port !~ 443) {
-        rewrite ^(/.*)$ https://$host$1 permanent;
-    }
 
     # WebSocket 代理
     location /ws/ {
         proxy_pass http://127.0.0.1:8076;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 60s;
     }
 
@@ -566,58 +667,54 @@ server {
     }
 
     location / {
-        try_files $uri $uri/ /index.php$is_args$query_string;
+        try_files \$uri \$uri/ /index.php\$is_args\$query_string;
     }
 
     location ~ \.php$ {
-        include enable-php-82.conf;
-        fastcgi_pass unix:/tmp/php-cgi-82.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:/tmp/php-cgi-${PHP_VERSION}.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
-    location ~ .*\.(js|css)?$ {
+    location ~ .*\.(js|css)$ {
         expires 1h;
-        error_log off;
-        access_log /dev/null;
+        access_log off;
     }
 
-    access_log  /www/wwwlogs/DOMAIN_PLACEHOLDER.log;
-    error_log   /www/wwwlogs/DOMAIN_PLACEHOLDER.error.log;
+    access_log /www/wwwlogs/${DOMAIN}.log;
+    error_log  /www/wwwlogs/${DOMAIN}.error.log;
 }
 NGINXEOF
     fi
 
-    # 替换占位符
-    sed -i "s|DOMAIN_PLACEHOLDER|${DOMAIN}|g" "${NGINX_CONF}"
-    sed -i "s|SITE_DIR_PLACEHOLDER|${SITE_DIR}|g" "${NGINX_CONF}"
-
-    # 创建 SSL 证书目录
-    mkdir -p "/www/server/panel/vhost/cert/${DOMAIN}"
-
-    # 尝试申请 Let's Encrypt 证书
-    log_info "申请 SSL 证书 ..."
-    if command -v certbot &> /dev/null; then
-        certbot certonly --nginx -d "${DOMAIN}" --non-interactive --agree-tos --email "admin@${DOMAIN}" 2>/dev/null && {
-            ln -sf "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "/www/server/panel/vhost/cert/${DOMAIN}/fullchain.pem"
-            ln -sf "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" "/www/server/panel/vhost/cert/${DOMAIN}/privkey.pem"
-        } || log_warn "Let's Encrypt 证书申请失败，请稍后在 aaPanel 面板中手动申请"
-    else
-        # 生成自签证书 (临时使用)
-        log_warn "生成自签 SSL 证书 (建议稍后在 aaPanel 面板中申请正式证书)"
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout "/www/server/panel/vhost/cert/${DOMAIN}/privkey.pem" \
-            -out "/www/server/panel/vhost/cert/${DOMAIN}/fullchain.pem" \
-            -subj "/CN=${DOMAIN}" 2>/dev/null
-    fi
-
     # 创建日志目录
     mkdir -p /www/wwwlogs
-    touch "/www/wwwlogs/${DOMAIN}.log"
-    touch "/www/wwwlogs/${DOMAIN}.error.log"
 
-    # 重载 Nginx
-    /etc/init.d/nginx reload > /dev/null 2>&1 || nginx -s reload 2>/dev/null || true
+    # 验证 Nginx 配置
+    nginx -t 2>/dev/null && {
+        nginx -s reload 2>/dev/null || /etc/init.d/nginx reload > /dev/null 2>&1 || true
+        log_success "Nginx 配置验证通过，已重载"
+    } || {
+        log_warn "Nginx 配置验证失败，请手动检查: ${NGINX_CONF}"
+    }
+
+    # 尝试申请 Let's Encrypt 证书
+    log_info "尝试申请 Let's Encrypt SSL 证书 ..."
+    if command -v certbot &> /dev/null; then
+        certbot certonly --webroot -w "${SITE_DIR}/public" -d "${DOMAIN}" \
+            --non-interactive --agree-tos --email "admin@${DOMAIN}" 2>/dev/null && {
+            cp "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "${CERT_DIR}/fullchain.pem"
+            cp "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" "${CERT_DIR}/privkey.pem"
+            nginx -s reload 2>/dev/null || true
+            log_success "Let's Encrypt 证书申请成功"
+        } || {
+            log_warn "Let's Encrypt 证书申请失败 (域名可能未解析到此服务器)"
+            log_warn "当前使用自签证书，请稍后在 aaPanel 面板中申请正式证书"
+        }
+    else
+        log_warn "certbot 未安装，请在 aaPanel 面板中手动申请 SSL 证书"
+    fi
 
     log_success "Nginx 站点配置完成"
 }
@@ -628,69 +725,101 @@ NGINXEOF
 setup_supervisor() {
     log_step "Step 8/9: 配置 Supervisor 守护进程"
 
-    # 确保 Supervisor 已安装
-    if ! command -v supervisord &> /dev/null; then
+    # 安装 Supervisor
+    if ! command -v supervisord &> /dev/null && ! command -v supervisorctl &> /dev/null; then
         log_info "安装 Supervisor ..."
-        $PKG_MANAGER install -y supervisor > /dev/null 2>&1 || {
-            pip3 install supervisor > /dev/null 2>&1 || pip install supervisor > /dev/null 2>&1
-        }
+        if [[ "$PKG_MANAGER" == "apt-get" ]]; then
+            apt-get install -y supervisor > /dev/null 2>&1
+        else
+            yum install -y supervisor > /dev/null 2>&1 || {
+                pip3 install supervisor > /dev/null 2>&1
+            }
+        fi
     fi
 
+    # 确保 Supervisor 运行
+    systemctl enable supervisord > /dev/null 2>&1 || true
+    systemctl start supervisord > /dev/null 2>&1 || true
+    # Debian/Ubuntu 用 supervisor 而非 supervisord
+    systemctl enable supervisor > /dev/null 2>&1 || true
+    systemctl start supervisor > /dev/null 2>&1 || true
+
+    # 确定配置目录
     local SUPERVISOR_CONF_DIR="/etc/supervisor/conf.d"
-    if [[ -d "/www/server/panel/plugin/supervisor/config" ]]; then
-        SUPERVISOR_CONF_DIR="/www/server/panel/plugin/supervisor/config"
-    fi
+    [[ -d "/etc/supervisord.d" ]] && SUPERVISOR_CONF_DIR="/etc/supervisord.d"
+
     mkdir -p "${SUPERVISOR_CONF_DIR}"
 
-    # Horizon (队列处理 - 必须)
+    # 创建日志目录
+    mkdir -p "${SITE_DIR}/storage/logs"
+    chown -R www:www "${SITE_DIR}/storage/logs"
+
+    # ---------- Horizon (队列 - 必须) ----------
     cat > "${SUPERVISOR_CONF_DIR}/xboard-horizon.conf" << EOF
 [program:xboard-horizon]
 process_name=%(program_name)s
 command=${PHP_BIN} ${SITE_DIR}/artisan horizon
+directory=${SITE_DIR}
 autostart=true
 autorestart=true
 user=www
 redirect_stderr=true
 stdout_logfile=${SITE_DIR}/storage/logs/horizon.log
+stdout_logfile_maxbytes=10MB
 stopwaitsecs=3600
 EOF
 
-    # Octane (可选)
+    log_info "已配置 Horizon 守护进程"
+
+    # ---------- Octane (可选) ----------
     if [[ "$ENABLE_OCTANE" == "true" ]]; then
         cat > "${SUPERVISOR_CONF_DIR}/xboard-octane.conf" << EOF
 [program:xboard-octane]
 process_name=%(program_name)s
-command=${PHP_BIN} ${SITE_DIR}/artisan octane:start --port 7010
+command=${PHP_BIN} ${SITE_DIR}/artisan octane:start --port=7010 --host=127.0.0.1
+directory=${SITE_DIR}
 autostart=true
 autorestart=true
 user=www
 redirect_stderr=true
 stdout_logfile=${SITE_DIR}/storage/logs/octane.log
+stdout_logfile_maxbytes=10MB
 stopwaitsecs=10
 EOF
+        log_info "已配置 Octane 守护进程 (端口 7010)"
     fi
 
-    # WebSocket (可选)
+    # ---------- WebSocket (可选) ----------
     if [[ "$ENABLE_WEBSOCKET" == "true" ]]; then
         cat > "${SUPERVISOR_CONF_DIR}/xboard-ws.conf" << EOF
 [program:xboard-ws]
 process_name=%(program_name)s
 command=${PHP_BIN} ${SITE_DIR}/artisan ws-server start
+directory=${SITE_DIR}
 autostart=true
 autorestart=true
 user=www
 redirect_stderr=true
 stdout_logfile=${SITE_DIR}/storage/logs/ws-server.log
+stdout_logfile_maxbytes=10MB
 stopwaitsecs=10
 EOF
+        log_info "已配置 WebSocket 守护进程 (端口 8076)"
     fi
 
     # 重载 Supervisor
     supervisorctl reread > /dev/null 2>&1 || true
     supervisorctl update > /dev/null 2>&1 || true
-    supervisorctl restart all > /dev/null 2>&1 || true
+
+    # 等待服务启动
+    sleep 2
+    supervisorctl start all > /dev/null 2>&1 || true
 
     log_success "Supervisor 守护进程配置完成"
+
+    # 显示状态
+    log_info "守护进程状态:"
+    supervisorctl status 2>/dev/null || true
 }
 
 # ============================================================
@@ -703,10 +832,10 @@ setup_crontab() {
 
     # 检查是否已存在
     if crontab -u www -l 2>/dev/null | grep -q "artisan schedule:run"; then
-        log_info "定时任务已存在，跳过"
+        log_info "定时任务已存在 ✓"
     else
-        (crontab -u www -l 2>/dev/null; echo "${CRON_CMD}") | crontab -u www -
-        log_info "已添加定时任务 (每分钟执行)"
+        (crontab -u www -l 2>/dev/null || echo "") | { cat; echo "${CRON_CMD}"; } | crontab -u www -
+        log_info "已添加定时任务 (每分钟执行 schedule:run)"
     fi
 
     log_success "定时任务配置完成"
@@ -716,51 +845,55 @@ setup_crontab() {
 # 打印安装结果
 # ============================================================
 print_result() {
-    # 获取管理路径
-    local ADMIN_PATH=""
+    # 获取管理后台路径
+    local ADMIN_PATH="admin"
     if [[ -f "${SITE_DIR}/.env" ]]; then
-        local APP_KEY=$(grep "^APP_KEY=" "${SITE_DIR}/.env" | cut -d'=' -f2-)
+        local APP_KEY=$(grep "^APP_KEY=" "${SITE_DIR}/.env" 2>/dev/null | cut -d'=' -f2-)
         if [[ -n "$APP_KEY" ]]; then
-            ADMIN_PATH=$(echo -n "$APP_KEY" | php -r "echo hash('crc32b', file_get_contents('php://stdin'));" 2>/dev/null || echo "admin")
+            ADMIN_PATH=$(${PHP_BIN} -r "echo hash('crc32b', '${APP_KEY}');" 2>/dev/null || echo "admin")
         fi
     fi
 
     echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║              🎉 Xboard 面板部署完成！                         ║${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║  面板地址:  ${CYAN}https://${DOMAIN}${NC}"
-    if [[ -n "$ADMIN_PATH" ]]; then
-    echo -e "${GREEN}║  管理后台:  ${CYAN}https://${DOMAIN}/${ADMIN_PATH}${NC}"
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║                                                                  ║${NC}"
+    echo -e "${GREEN}║              🎉  Xboard 面板部署完成！                            ║${NC}"
+    echo -e "${GREEN}║                                                                  ║${NC}"
+    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}面板地址:${NC}   ${CYAN}https://${DOMAIN}${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}管理后台:${NC}   ${CYAN}https://${DOMAIN}/${ADMIN_PATH}${NC}"
+    echo -e "${GREEN}║${NC}"
+    if [[ -n "$ADMIN_EMAIL" && -n "$ADMIN_PASS" ]]; then
+    echo -e "${GREEN}║${NC}  ${BOLD}管理员账号:${NC} ${YELLOW}${ADMIN_EMAIL}${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}管理员密码:${NC} ${YELLOW}${ADMIN_PASS}${NC}"
+    echo -e "${GREEN}║${NC}"
     fi
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║  数据库信息:${NC}"
-    echo -e "${GREEN}║    数据库名: ${YELLOW}${DB_NAME}${NC}"
-    echo -e "${GREEN}║    用户名:   ${YELLOW}${DB_USER}${NC}"
-    echo -e "${GREEN}║    密码:     ${YELLOW}${DB_PASS}${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║  站点目录:  ${YELLOW}${SITE_DIR}${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║  服务状态:${NC}"
-    echo -e "${GREEN}║    Horizon:   ${CYAN}运行中${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}数据库信息:${NC}"
+    echo -e "${GREEN}║${NC}    数据库名:  ${YELLOW}${DB_NAME}${NC}"
+    echo -e "${GREEN}║${NC}    用户名:    ${YELLOW}${DB_USER}${NC}"
+    echo -e "${GREEN}║${NC}    密码:      ${YELLOW}${DB_PASS}${NC}"
+    echo -e "${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}站点目录:${NC}   ${YELLOW}${SITE_DIR}${NC}"
+    echo -e "${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}服务状态:${NC}"
+    echo -e "${GREEN}║${NC}    Horizon:    ${CYAN}运行中${NC}"
     if [[ "$ENABLE_OCTANE" == "true" ]]; then
-    echo -e "${GREEN}║    Octane:    ${CYAN}运行中 (端口 7010)${NC}"
+    echo -e "${GREEN}║${NC}    Octane:     ${CYAN}运行中 (端口 7010)${NC}"
     fi
     if [[ "$ENABLE_WEBSOCKET" == "true" ]]; then
-    echo -e "${GREEN}║    WebSocket: ${CYAN}运行中 (端口 8076)${NC}"
+    echo -e "${GREEN}║${NC}    WebSocket:  ${CYAN}运行中 (端口 8076)${NC}"
     fi
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}║  ${YELLOW}⚠ 重要提示:${NC}"
-    echo -e "${GREEN}║  1. 请在 aaPanel 面板中为域名申请正式 SSL 证书               ║${NC}"
-    echo -e "${GREEN}║  2. 首次访问管理后台会显示管理员账号密码                      ║${NC}"
-    echo -e "${GREEN}║  3. 请妥善保存以上数据库密码信息                              ║${NC}"
-    echo -e "${GREEN}║                                                              ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${GREEN}║${NC}"
+    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${YELLOW}⚠ 重要提示:${NC}"
+    echo -e "${GREEN}║${NC}  1. 请在 aaPanel 面板中为 ${DOMAIN} 申请正式 SSL 证书"
+    echo -e "${GREEN}║${NC}  2. 请妥善保存以上账号密码信息"
+    echo -e "${GREEN}║${NC}  3. 如管理员账号创建失败，请手动执行:"
+    echo -e "${GREEN}║${NC}     cd ${SITE_DIR} && ${PHP_BIN} artisan xboard:install"
+    echo -e "${GREEN}║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     # 保存安装信息到文件
@@ -769,8 +902,12 @@ print_result() {
 Xboard 安装信息
 安装时间: $(date '+%Y-%m-%d %H:%M:%S')
 ========================================
+
 面板地址: https://${DOMAIN}
 管理后台: https://${DOMAIN}/${ADMIN_PATH}
+管理员:   ${ADMIN_EMAIL}
+密码:     ${ADMIN_PASS}
+
 站点目录: ${SITE_DIR}
 
 数据库:
@@ -778,17 +915,21 @@ Xboard 安装信息
   用户名:   ${DB_USER}
   密码:     ${DB_PASS}
 
-服务:
-  Horizon:   supervisor -> xboard-horizon
-  Octane:    supervisor -> xboard-octane (端口 7010)
-  WebSocket: supervisor -> xboard-ws (端口 8076)
+Redis:
+  地址: 127.0.0.1:6379
+  密码: ${REDIS_PASS:-无}
 
-常用命令:
-  重启 Octane:    supervisorctl restart xboard-octane
-  重启 Horizon:   supervisorctl restart xboard-horizon
-  重启 WebSocket: supervisorctl restart xboard-ws
-  查看日志:       tail -f ${SITE_DIR}/storage/logs/laravel.log
-  更新代码:       cd ${SITE_DIR} && git pull && sh update.sh
+服务管理:
+  supervisorctl restart xboard-horizon
+  supervisorctl restart xboard-octane
+  supervisorctl restart xboard-ws
+  supervisorctl status
+
+日志:
+  tail -f ${SITE_DIR}/storage/logs/laravel.log
+
+更新:
+  cd ${SITE_DIR} && git pull && sh update.sh && supervisorctl restart all
 ========================================
 EOF
 
