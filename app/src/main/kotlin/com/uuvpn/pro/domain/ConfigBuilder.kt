@@ -54,14 +54,40 @@ object ConfigBuilder {
     // ============================================================
 
     private fun buildDns(routeMode: String): Map<String, Any> {
-        val servers = mutableListOf(
-            mapOf("tag" to "remote-dns", "address" to "https://8.8.8.8/dns-query", "detour" to "proxy"),
-            mapOf("tag" to "local-dns", "address" to "https://223.5.5.5/dns-query", "detour" to "direct"),
-            mapOf("tag" to "block-dns", "address" to "rcode://success"),
+        // sing-box 1.14+ 新格式: 必须有 type 字段
+        val servers = mutableListOf<Map<String, Any>>(
+            // 本地直连 DNS（用于解析 DoH 服务器地址）
+            mapOf(
+                "tag" to "dns-resolver",
+                "type" to "udp",
+                "address" to "223.5.5.5",
+                "detour" to "direct",
+            ),
+            // 远程 DoH DNS（走代理）
+            mapOf(
+                "tag" to "remote-dns",
+                "type" to "https",
+                "address" to "https://8.8.8.8/dns-query",
+                "address_resolver" to "dns-resolver",
+                "detour" to "proxy",
+            ),
+            // 本地 DoH DNS（直连）
+            mapOf(
+                "tag" to "local-dns",
+                "type" to "https",
+                "address" to "https://223.5.5.5/dns-query",
+                "address_resolver" to "dns-resolver",
+                "detour" to "direct",
+            ),
+            // 阻断 DNS
+            mapOf(
+                "tag" to "block-dns",
+                "type" to "local",
+            ),
         )
 
         val rules = mutableListOf<Map<String, Any>>(
-            mapOf("outbound" to listOf("any"), "server" to "local-dns"),
+            mapOf("outbound" to listOf("any"), "server" to "dns-resolver"),
             mapOf("clash_mode" to "Direct", "server" to "local-dns"),
             mapOf("clash_mode" to "Global", "server" to "remote-dns"),
         )
@@ -73,6 +99,7 @@ object ConfigBuilder {
         return mapOf(
             "servers" to servers,
             "rules" to rules,
+            "final" to "remote-dns",
             "strategy" to "prefer_ipv4",
         )
     }
