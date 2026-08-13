@@ -175,6 +175,48 @@ echo -e "  ${GREEN}✓ systemd 环境变量已配置${NC}"
 echo ""
 
 # ============================================================
+# Step 1.6: 开放防火墙端口
+# ============================================================
+echo -e "${BLUE}[1.6/3] 开放防火墙端口（18 种协议）...${NC}"
+
+# 直连 9 种端口
+DIRECT_PORTS=(443 2053 2083 8080 8388 8389 8443 8444 8446)
+# WARP 9 种端口
+WARP_PORTS=(10443 12053 12083 18080 18388 18389 18443 18444 18446)
+ALL_PORTS=("${DIRECT_PORTS[@]}" "${WARP_PORTS[@]}")
+
+if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+    for port in "${ALL_PORTS[@]}"; do
+        ufw allow "$port" >/dev/null 2>&1
+    done
+    echo -e "  ${GREEN}✓ ufw 已开放 ${#ALL_PORTS[@]} 个端口${NC}"
+elif command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+    for port in "${ALL_PORTS[@]}"; do
+        firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+        firewall-cmd --permanent --add-port="${port}/udp" >/dev/null 2>&1
+    done
+    firewall-cmd --reload >/dev/null 2>&1
+    echo -e "  ${GREEN}✓ firewalld 已开放 ${#ALL_PORTS[@]} 个端口${NC}"
+elif command -v iptables &>/dev/null; then
+    for port in "${ALL_PORTS[@]}"; do
+        iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
+            iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || \
+            iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+    done
+    # 持久化 iptables（如果有 iptables-save）
+    if command -v iptables-save &>/dev/null; then
+        iptables-save > /etc/iptables.rules 2>/dev/null || true
+    fi
+    echo -e "  ${GREEN}✓ iptables 已开放 ${#ALL_PORTS[@]} 个端口${NC}"
+else
+    echo -e "  ${YELLOW}⚠ 未检测到防火墙，请手动确认端口已开放${NC}"
+fi
+
+echo -e "  ${CYAN}直连端口: ${DIRECT_PORTS[*]}${NC}"
+echo -e "  ${CYAN}WARP端口: ${WARP_PORTS[*]}${NC}"
+echo ""
+# ============================================================
 # Step 2: 获取服务器信息
 # ============================================================
 echo -e "${BLUE}[2/3] 检测服务器信息 ...${NC}"
