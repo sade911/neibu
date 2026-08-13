@@ -3,9 +3,9 @@ name: Build Android APK
 on:
   push:
     tags: ['v*']
-    branches: [main]
+    branches: [main, android]
   pull_request:
-    branches: [main]
+    branches: [main, android]
   workflow_dispatch:
 
 jobs:
