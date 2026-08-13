@@ -5,8 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.uuvpn.pro.data.model.NodeModel
 import com.uuvpn.pro.data.repository.NodeRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import javax.inject.Inject
 
 @HiltViewModel
@@ -88,16 +91,43 @@ class NodeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 并行 ping 所有节点（每批 10 个并发，避免阻塞太久）
+     */
     fun pingAllNodes() {
         viewModelScope.launch {
             _isPinging.value = true
-            val updated = _nodes.value.map { node ->
-                val ping = nodeRepository.pingNode(node)
-                nodeRepository.updatePing(node.id, ping)
-                node.copy(pingMs = ping)
+            try {
+                val currentNodes = _nodes.value
+                // 分批并行 ping，每批最多 10 个
+                val batchSize = 10
+                val updatedNodes = currentNodes.toMutableList()
+
+                currentNodes.chunked(batchSize).forEachIndexed { batchIndex, batch ->
+                    supervisorScope {
+                        val results = batch.map { node ->
+                            async {
+                                val ping = nodeRepository.pingNode(node)
+                                nodeRepository.updatePing(node.id, ping)
+                                node.id to ping
+                            }
+                        }.awaitAll()
+
+                        // 更新到列表
+                        results.forEach { (nodeId, ping) ->
+                            val index = updatedNodes.indexOfFirst { it.id == nodeId }
+                            if (index >= 0) {
+                                updatedNodes[index] = updatedNodes[index].copy(pingMs = ping)
+                            }
+                        }
+
+                        // 每批完成后更新 UI
+                        _nodes.value = updatedNodes.toList()
+                    }
+                }
+            } finally {
+                _isPinging.value = false
             }
-            _nodes.value = updated
-            _isPinging.value = false
         }
     }
 

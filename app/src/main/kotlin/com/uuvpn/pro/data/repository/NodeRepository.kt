@@ -70,7 +70,7 @@ class NodeRepository @Inject constructor(
         try {
             val start = System.currentTimeMillis()
             val socket = Socket()
-            socket.connect(InetSocketAddress(node.host, node.port), 3000)
+            socket.connect(InetSocketAddress(node.host, node.port), 1500)
             val elapsed = (System.currentTimeMillis() - start).toInt()
             socket.close()
             elapsed

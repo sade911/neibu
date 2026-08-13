@@ -1,5 +1,10 @@
 package com.uuvpn.pro.viewmodel
 
+import android.app.Activity
+import android.content.Intent
+import android.net.VpnService
+import android.util.Log
+import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.uuvpn.pro.data.local.PrefsManager
@@ -25,6 +30,10 @@ class VpnViewModel @Inject constructor(
     private val prefs: PrefsManager,
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "VpnViewModel"
+    }
+
     // ===== VPN State =====
     val vpnState: StateFlow<VpnState> = vpnManager.vpnState
     val trafficStats: StateFlow<TrafficStats> = vpnManager.trafficStats
@@ -47,6 +56,10 @@ class VpnViewModel @Inject constructor(
         val s = seconds % 60
         "%02d:%02d:%02d".format(h, m, s)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "00:00:00")
+
+    // ===== 错误/提示信息 =====
+    private val _toastMessage = MutableSharedFlow<String>()
+    val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
 
     private var timerStartMs = 0L
 
@@ -106,10 +119,44 @@ class VpnViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 切换连接 — 处理各种前置检查并给出 Toast 提示
+     */
     fun toggleConnection() {
         viewModelScope.launch {
-            val uuid = prefs.getCurrentUuidSync()
-            vpnManager.toggleConnection(_selectedNode.value, uuid)
+            val currentState = vpnManager.vpnState.value
+
+            // 如果正在连接/断开中，忽略
+            if (currentState.isTransitioning) {
+                Log.d(TAG, "Ignoring toggle: state is transitioning")
+                return@launch
+            }
+
+            // 如果已连接，断开
+            if (currentState == VpnState.CONNECTED) {
+                vpnManager.disconnect()
+                return@launch
+            }
+
+            // ===== 前置检查 =====
+            val node = _selectedNode.value
+            if (node == null) {
+                _toastMessage.emit("请先选择一个节点")
+                return@launch
+            }
+
+            var uuid = prefs.getCurrentUuidSync()
+            if (uuid.isNullOrBlank()) {
+                // 尝试用 token 作为 UUID 的 fallback
+                uuid = prefs.getAuthTokenSync()
+            }
+            if (uuid.isNullOrBlank()) {
+                _toastMessage.emit("缺少认证信息，请重新登录")
+                return@launch
+            }
+
+            Log.d(TAG, "Connecting to: ${node.name} with uuid: ${uuid.take(8)}...")
+            vpnManager.connect(node, uuid)
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.uuvpn.pro.ui.screens.home
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
@@ -7,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -15,9 +17,11 @@ import com.uuvpn.pro.data.model.VpnState
 import com.uuvpn.pro.ui.screens.home.components.*
 import com.uuvpn.pro.ui.theme.*
 import com.uuvpn.pro.viewmodel.VpnViewModel
+import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 fun HomeScreen(
+    onNavigateToNodes: () -> Unit = {},
     viewModel: VpnViewModel = hiltViewModel(),
 ) {
     val vpnState by viewModel.vpnState.collectAsState()
@@ -25,9 +29,17 @@ fun HomeScreen(
     val selectedNode by viewModel.selectedNode.collectAsState()
     val trafficStats by viewModel.trafficStats.collectAsState()
     val connectionTime by viewModel.connectionTimeFormatted.collectAsState()
+    val context = LocalContext.current
 
     val isConnected = vpnState == VpnState.CONNECTED
     val isConnecting = vpnState == VpnState.CONNECTING
+
+    // 监听 Toast 消息
+    LaunchedEffect(Unit) {
+        viewModel.toastMessage.collectLatest { message ->
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -114,7 +126,7 @@ fun HomeScreen(
         // ===== 当前节点选择器 =====
         NodeSelector(
             selectedNode = selectedNode,
-            onClick = { /* 由底部导航切换到节点页 */ },
+            onClick = onNavigateToNodes,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
