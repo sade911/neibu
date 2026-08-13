@@ -177,10 +177,15 @@ if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
         -days 3650 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" \
         -subj "/CN=www.bing.com" 2>/dev/null
 fi
-REALITY_OUTPUT=$(xray x25519 2>/dev/null)
-REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep 'Private key:' | awk '{print $3}')
-REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep 'Public key:' | awk '{print $3}')
+REALITY_OUTPUT=$(xray x25519 2>/dev/null || true)
+REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep 'Private key:' | awk '{print $3}' || true)
+REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep 'Public key:' | awk '{print $3}' || true)
 REALITY_SHORT_ID=$(openssl rand -hex 4)
+if [[ -z "$REALITY_PRIVATE_KEY" ]]; then
+    echo -e "  ${RED}FAIL: xray x25519 failed${NC}"
+    echo -e "  Debug: $(xray x25519 2>&1 || true)"
+    exit 1
+fi
 echo -e "  ${GREEN}OK${NC}"
 
 # [9/13] Random ports
