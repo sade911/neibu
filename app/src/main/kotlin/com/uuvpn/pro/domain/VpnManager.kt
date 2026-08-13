@@ -1,9 +1,8 @@
 package com.uuvpn.pro.domain
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.net.VpnService
+import android.util.Log
 import com.uuvpn.pro.data.local.PrefsManager
 import com.uuvpn.pro.data.model.NodeModel
 import com.uuvpn.pro.data.model.TrafficStats
@@ -17,8 +16,6 @@ import javax.inject.Singleton
 
 /**
  * VPN 管理器 — 统一管理 VPN 连接生命周期
- *
- * 暴露 StateFlow 给 ViewModel 使用
  */
 @Singleton
 class VpnManager @Inject constructor(
@@ -26,6 +23,10 @@ class VpnManager @Inject constructor(
     private val prefs: PrefsManager,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    companion object {
+        private const val TAG = "VpnManager"
+    }
 
     // ===== State =====
     private val _vpnState = MutableStateFlow(VpnState.DISCONNECTED)
@@ -35,20 +36,9 @@ class VpnManager @Inject constructor(
     val trafficStats: StateFlow<TrafficStats> = _trafficStats.asStateFlow()
 
     private val _connectionStartTime = MutableStateFlow(0L)
-    val connectionDuration: StateFlow<Long>
-        get() = _connectionStartTime.map { start ->
-            if (start > 0) (System.currentTimeMillis() - start) / 1000 else 0L
-        }.stateIn(scope, SharingStarted.WhileSubscribed(), 0L)
 
     private var statsJob: Job? = null
-
-    /**
-     * 检查是否需要 VPN 权限
-     * @return null 如果已有权限，否则返回需要启动的 Intent
-     */
-    fun prepareVpn(activity: Activity): Intent? {
-        return VpnService.prepare(activity)
-    }
+    private var statusCheckJob: Job? = null
 
     /**
      * 连接 VPN
@@ -57,6 +47,7 @@ class VpnManager @Inject constructor(
         if (_vpnState.value == VpnState.CONNECTING || _vpnState.value == VpnState.CONNECTED) return
 
         _vpnState.value = VpnState.CONNECTING
+        Log.i(TAG, "Connecting to ${node.name} (${node.type})")
 
         try {
             val routeMode = prefs.routeMode.first()
@@ -75,12 +66,10 @@ class VpnManager @Inject constructor(
             }
             context.startForegroundService(intent)
 
-            // 等待状态变化
-            delay(500)
-            _vpnState.value = VpnState.CONNECTED
-            _connectionStartTime.value = System.currentTimeMillis()
-            startStatsTimer()
+            // 轮询检查 Service 状态
+            startStatusCheck()
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to connect: ${e.message}", e)
             _vpnState.value = VpnState.DISCONNECTED
         }
     }
@@ -91,17 +80,23 @@ class VpnManager @Inject constructor(
     fun disconnect() {
         if (_vpnState.value == VpnState.DISCONNECTED) return
 
+        Log.i(TAG, "Disconnecting")
         _vpnState.value = VpnState.DISCONNECTING
 
         val intent = Intent(context, SingBoxVpnService::class.java).apply {
             action = SingBoxVpnService.ACTION_STOP
         }
-        context.startService(intent)
+        try {
+            context.startService(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send stop intent: ${e.message}")
+        }
 
         _vpnState.value = VpnState.DISCONNECTED
         _connectionStartTime.value = 0L
         _trafficStats.value = TrafficStats()
         stopStatsTimer()
+        stopStatusCheck()
     }
 
     /**
@@ -131,6 +126,48 @@ class VpnManager @Inject constructor(
     }
 
     // ============================================================
+    // Status Check — 轮询 Service 状态
+    // ============================================================
+
+    private fun startStatusCheck() {
+        statusCheckJob?.cancel()
+        statusCheckJob = scope.launch {
+            var attempts = 0
+            while (isActive && attempts < 10) {
+                delay(500)
+                val status = SingBoxVpnService.getStatus()
+                Log.d(TAG, "Service status check #$attempts: $status")
+
+                when (status) {
+                    "running" -> {
+                        _vpnState.value = VpnState.CONNECTED
+                        _connectionStartTime.value = System.currentTimeMillis()
+                        startStatsTimer()
+                        return@launch
+                    }
+                    "error", "stopped" -> {
+                        if (_vpnState.value == VpnState.CONNECTING) {
+                            _vpnState.value = VpnState.DISCONNECTED
+                        }
+                        return@launch
+                    }
+                }
+                attempts++
+            }
+            // 超时
+            if (_vpnState.value == VpnState.CONNECTING) {
+                Log.w(TAG, "Connection timed out")
+                _vpnState.value = VpnState.DISCONNECTED
+            }
+        }
+    }
+
+    private fun stopStatusCheck() {
+        statusCheckJob?.cancel()
+        statusCheckJob = null
+    }
+
+    // ============================================================
     // Traffic Stats Timer
     // ============================================================
 
@@ -144,6 +181,13 @@ class VpnManager @Inject constructor(
                     uploadBytes = stats["upload"] ?: 0L,
                     downloadBytes = stats["download"] ?: 0L,
                 )
+
+                // 检查是否断开了
+                if (SingBoxVpnService.getStatus() != "running") {
+                    _vpnState.value = VpnState.DISCONNECTED
+                    _connectionStartTime.value = 0L
+                    stopStatsTimer()
+                }
             }
         }
     }

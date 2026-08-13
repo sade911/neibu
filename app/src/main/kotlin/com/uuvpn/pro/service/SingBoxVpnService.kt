@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -17,12 +18,6 @@ import java.io.FileOutputStream
  * SingBox VPN Service — Android VpnService 实现
  *
  * 通过 libbox.aar (sing-box Go Mobile) 运行 VPN
- * 当 libbox 不可用时，VPN 接口已建立但无实际代理（占位）
- *
- * 集成 libbox 后替换 TODO 部分：
- *   1. 将 libbox.aar 放入 app/libs/
- *   2. 取消注释 LibBox.start() / LibBox.stop() 调用
- *   3. 实现 TrafficMonitor 对接
  */
 class SingBoxVpnService : VpnService() {
 
@@ -32,6 +27,16 @@ class SingBoxVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // 立即启动前台服务，防止 5 秒超时被系统杀死
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                createNotification("正在准备…"),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification("正在准备…"))
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -40,6 +45,9 @@ class SingBoxVpnService : VpnService() {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 if (config != null) {
                     startVpn(config)
+                } else {
+                    Log.e(TAG, "No config provided")
+                    stopVpn()
                 }
             }
             ACTION_STOP -> {
@@ -60,6 +68,7 @@ class SingBoxVpnService : VpnService() {
             // 1. 写配置到文件
             val configFile = File(filesDir, "singbox_config.json")
             FileOutputStream(configFile).use { it.write(configJson.toByteArray()) }
+            Log.i(TAG, "Config written to: ${configFile.absolutePath}")
 
             // 2. 建立 TUN 接口
             val builder = Builder()
@@ -85,19 +94,32 @@ class SingBoxVpnService : VpnService() {
                 isRunning = true
                 currentStatus = "running"
 
-                // TODO: 集成 libbox 后，在这里调用:
-                // val box = Libbox.newService(configFile.absolutePath)
-                // box.start()
-                //
-                // 或使用 fd 方式:
-                // Libbox.startWithFd(configFile.absolutePath, vpnInterface!!.fd)
+                // 更新通知
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.notify(NOTIFICATION_ID, createNotification("已连接"))
 
-                startForeground(NOTIFICATION_ID, createNotification("已连接"))
                 Log.i(TAG, "VPN started with TUN interface fd=${vpnInterface!!.fd}")
+
+                // TODO: 集成 libbox 后，在这里启动 sing-box 核心:
+                // try {
+                //     val options = io.nekohasekai.libbox.SetupOptions().apply {
+                //         basePath = filesDir.absolutePath
+                //     }
+                //     io.nekohasekai.libbox.Libbox.setup(options)
+                //     boxService = io.nekohasekai.libbox.Libbox.newService(configFile.absolutePath)
+                //     boxService?.start()
+                // } catch (e: Exception) {
+                //     Log.e(TAG, "Failed to start sing-box core: ${e.message}", e)
+                // }
+            } else {
+                Log.e(TAG, "VPN establish() returned null — permission denied?")
+                currentStatus = "error"
+                stopVpn()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start VPN: ${e.message}", e)
             currentStatus = "error"
+            stopVpn()
         }
     }
 
@@ -105,8 +127,8 @@ class SingBoxVpnService : VpnService() {
         isRunning = false
         currentStatus = "stopped"
 
-        // TODO: 集成 libbox 后，在这里调用:
-        // box?.stop()
+        // TODO: 集成 libbox 后:
+        // try { boxService?.stop() } catch (_: Exception) {}
 
         try {
             vpnInterface?.close()
@@ -125,6 +147,7 @@ class SingBoxVpnService : VpnService() {
     }
 
     override fun onRevoke() {
+        Log.w(TAG, "VPN permission revoked by system")
         stopVpn()
         super.onRevoke()
     }
@@ -134,18 +157,16 @@ class SingBoxVpnService : VpnService() {
     // ============================================================
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "VPN 服务",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = "VPN 连接状态"
-                setShowBadge(false)
-            }
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "VPN 服务",
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = "VPN 连接状态"
+            setShowBadge(false)
         }
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(channel)
     }
 
     private fun createNotification(status: String): Notification {
@@ -165,7 +186,7 @@ class SingBoxVpnService : VpnService() {
     }
 
     // ============================================================
-    // 静态方法 — 供 VpnManager 查询
+    // 静态方法
     // ============================================================
 
     companion object {
@@ -182,11 +203,7 @@ class SingBoxVpnService : VpnService() {
         fun getStatus(): String = currentStatus
 
         fun getTrafficStats(): Map<String, Long> {
-            // TODO: 集成 libbox 后，从 sing-box 获取真实流量统计
-            // return mapOf(
-            //     "upload" to Libbox.getUploadBytes(),
-            //     "download" to Libbox.getDownloadBytes(),
-            // )
+            // TODO: 集成 libbox 后从 sing-box 获取真实统计
             return mapOf("upload" to 0L, "download" to 0L)
         }
     }
