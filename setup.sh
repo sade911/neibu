@@ -490,21 +490,52 @@ configure_php() {
         else
             log_info "安装 PHP 扩展: ${ext} ..."
 
-            # 方法1: 宝塔 install_soft.sh
-            if [[ -f "$PHP_EXT_SCRIPT" ]]; then
-                bash "$PHP_EXT_SCRIPT" 1 install "${ext}" "${PHP_VERSION}" > /tmp/bt_ext_${ext}.log 2>&1 || true
-            fi
-
-            # 方法2: pecl
-            if ! ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
-                log_info "尝试通过 pecl 安装 ${ext_check} ..."
-                /www/server/php/${PHP_VERSION}/bin/pecl install "${ext_check}" > /tmp/bt_ext_${ext}.log 2>&1 || true
-                # 确保 extension 在 ini 中启用
-                if [[ -f "$PHP_INI" ]] && ! grep -q "extension=${ext_check}" "$PHP_INI" 2>/dev/null; then
-                    echo "extension=${ext_check}.so" >> "$PHP_INI"
+            # fileinfo 是 PHP 内建扩展，通常只需在 ini 中启用
+            if [[ "$ext_check" == "fileinfo" ]]; then
+                log_info "fileinfo 是 PHP 内建扩展，尝试直接启用 ..."
+                # 查找 fileinfo.so
+                local fileinfo_so
+                fileinfo_so=$(find /www/server/php/${PHP_VERSION}/ -name "fileinfo.so" 2>/dev/null | head -1)
+                if [[ -n "$fileinfo_so" ]]; then
+                    log_info "找到 fileinfo.so: ${fileinfo_so}"
+                    # 在 php.ini 和 php-cli.ini 中启用
+                    for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
+                        if [[ -f "$ini_file" ]] && ! grep -q "^extension=fileinfo" "$ini_file" 2>/dev/null; then
+                            echo "extension=fileinfo" >> "$ini_file"
+                        fi
+                    done
+                else
+                    # .so 不存在，尝试宝塔安装
+                    if [[ -f "$PHP_EXT_SCRIPT" ]]; then
+                        bash "$PHP_EXT_SCRIPT" 1 install fileinfo "${PHP_VERSION}" > /tmp/bt_ext_fileinfo.log 2>&1 || true
+                    fi
+                    # 再次查找
+                    fileinfo_so=$(find /www/server/php/${PHP_VERSION}/ -name "fileinfo.so" 2>/dev/null | head -1)
+                    if [[ -n "$fileinfo_so" ]]; then
+                        for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
+                            if [[ -f "$ini_file" ]] && ! grep -q "^extension=fileinfo" "$ini_file" 2>/dev/null; then
+                                echo "extension=fileinfo" >> "$ini_file"
+                            fi
+                        done
+                    fi
                 fi
-                if [[ -f "$PHP_CLI_INI" ]] && ! grep -q "extension=${ext_check}" "$PHP_CLI_INI" 2>/dev/null; then
-                    echo "extension=${ext_check}.so" >> "$PHP_CLI_INI"
+                # 重启 PHP 使配置生效
+                /etc/init.d/php-fpm-${PHP_VERSION} restart > /dev/null 2>&1 || true
+                sleep 1
+            else
+                # 非 fileinfo 扩展: 宝塔 + pecl 流程
+                if [[ -f "$PHP_EXT_SCRIPT" ]]; then
+                    bash "$PHP_EXT_SCRIPT" 1 install "${ext}" "${PHP_VERSION}" > /tmp/bt_ext_${ext}.log 2>&1 || true
+                fi
+
+                if ! ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+                    log_info "尝试通过 pecl 安装 ${ext_check} ..."
+                    /www/server/php/${PHP_VERSION}/bin/pecl install "${ext_check}" > /tmp/bt_ext_${ext}.log 2>&1 || true
+                    for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
+                        if [[ -f "$ini_file" ]] && ! grep -q "extension=${ext_check}" "$ini_file" 2>/dev/null; then
+                            echo "extension=${ext_check}.so" >> "$ini_file"
+                        fi
+                    done
                 fi
             fi
 
@@ -659,6 +690,9 @@ deploy_xboard() {
     fi
     rm -rf .htaccess 404.html 502.html index.html .user.ini 2>/dev/null || true
 
+    # 解决 git 目录所有权问题 (root 运行但目录属主是 www)
+    git config --global --add safe.directory '*' 2>/dev/null || true
+
     # 克隆代码
     if [[ -d ".git" ]]; then
         log_info "代码已存在，拉取最新版本 ..."
@@ -680,9 +714,9 @@ deploy_xboard() {
     ${PHP_BIN} composer.phar install --no-dev --optimize-autoloader --no-interaction 2>&1 || {
         log_warn "composer install 失败，尝试 composer update ..."
         ${PHP_BIN} composer.phar update --no-dev --optimize-autoloader --no-interaction 2>&1 || {
-            log_warn "优化模式失败，尝试标准安装 ..."
-            ${PHP_BIN} composer.phar install --no-interaction 2>&1 || \
-            ${PHP_BIN} composer.phar update --no-interaction 2>&1 || true
+            log_warn "优化模式失败，尝试跳过平台检查安装 ..."
+            ${PHP_BIN} composer.phar install --no-dev --no-interaction --ignore-platform-req=ext-fileinfo 2>&1 || \
+            ${PHP_BIN} composer.phar update --no-dev --no-interaction --ignore-platform-req=ext-fileinfo 2>&1 || true
         }
     }
 
