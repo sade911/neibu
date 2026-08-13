@@ -78,8 +78,13 @@ ARCH=$(get_arch)
 # ============================================================
 echo -e "${BLUE}[1/12] 安装依赖 ...${NC}"
 if command -v apt-get &>/dev/null; then
+    # 修复失效的 Debian 源（如 bullseye-backports 已归档）
+    sed -i '/backports/d' /etc/apt/sources.list 2>/dev/null || true
+    for f in /etc/apt/sources.list.d/*.list; do
+        [[ -f "$f" ]] && sed -i '/backports/d' "$f" 2>/dev/null || true
+    done
     apt-get update -qq 2>/dev/null || true
-    apt-get install -y -qq curl openssl unzip wget 2>/dev/null || true
+    apt-get install -y -qq curl jq openssl unzip wget 2>/dev/null || true
 elif command -v yum &>/dev/null; then
     yum install -y -q curl openssl unzip wget 2>/dev/null || true
 fi
