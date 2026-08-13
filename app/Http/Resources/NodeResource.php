@@ -19,11 +19,15 @@ class NodeResource extends JsonResource
             'type' => $this['type'],
             'version' => $this['version'] ?? null,
             'name' => $this['name'],
+            'host' => $this['host'],
+            'port' => (int) $this['port'],
+            'server_port' => (int) ($this['server_port'] ?? $this['port']),
             'rate' => $this['rate'],
             'tags' => $this['tags'],
             'is_online' => $this['is_online'],
             'cache_key' => $this['cache_key'],
-            'last_check_at' => $this['last_check_at']
+            'last_check_at' => $this['last_check_at'],
+            'protocol_settings' => $this['protocol_settings'] ?? null,
         ];
     }
 }
