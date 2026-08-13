@@ -291,8 +291,14 @@ install_lnmp() {
         if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
             log_success "Nginx 安装成功"
         else
-            log_warn "Nginx 安装失败，请在 aaPanel 面板中手动安装"
-            log_warn "查看日志: cat ${NGINX_LOG}"
+            log_warn "Nginx 自动安装失败，请在 aaPanel 面板中手动安装 Nginx"
+            log_warn "安装日志: cat ${NGINX_LOG}"
+            read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
+            if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
+                log_success "Nginx 已检测到 ✓"
+            else
+                log_warn "仍未检测到 Nginx，后续步骤可能受影响"
+            fi
         fi
     fi
 
@@ -347,8 +353,14 @@ install_lnmp() {
         if [[ -f "/www/server/mysql/bin/mysql" ]]; then
             log_success "MySQL 安装成功"
         else
-            log_warn "MySQL 可能安装失败，请在 aaPanel 面板中手动安装"
-            log_warn "查看日志: cat ${MYSQL_LOG}"
+            log_warn "MySQL 自动安装失败，请在 aaPanel 面板中手动安装 MySQL 5.7"
+            log_warn "安装日志: cat ${MYSQL_LOG}"
+            read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
+            if [[ -f "/www/server/mysql/bin/mysql" ]]; then
+                log_success "MySQL 已检测到 ✓"
+            else
+                log_warn "仍未检测到 MySQL，后续步骤可能受影响"
+            fi
         fi
     fi
 
@@ -409,9 +421,16 @@ install_lnmp() {
         if [[ -f "${PHP_BIN}" ]]; then
             log_success "PHP 8.2 安装成功"
         else
-            log_error "PHP 8.2 安装失败！请在 aaPanel 面板中手动安装 PHP 8.2 后重新运行脚本"
-            log_error "查看日志: cat ${PHP_LOG}"
-            exit 1
+            log_warn "PHP 8.2 自动安装失败，请在 aaPanel 面板中手动安装 PHP 8.2"
+            log_warn "安装日志: cat ${PHP_LOG}"
+            read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
+            if [[ -f "${PHP_BIN}" ]]; then
+                log_success "PHP 8.2 已检测到 ✓"
+            else
+                log_error "仍未检测到 PHP 8.2，后续步骤需要 PHP，脚本无法继续"
+                log_error "请安装 PHP 8.2 后重新运行脚本"
+                exit 1
+            fi
         fi
     fi
 
@@ -440,7 +459,13 @@ install_lnmp() {
         if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
             log_success "Redis 安装完成"
         else
-            log_warn "Redis 安装失败，请在 aaPanel 面板中手动安装"
+            log_warn "Redis 自动安装失败，请在 aaPanel 面板中手动安装 Redis"
+            read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
+            if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
+                log_success "Redis 已检测到 ✓"
+            else
+                log_warn "仍未检测到 Redis，后续步骤可能受影响"
+            fi
         fi
     fi
 
