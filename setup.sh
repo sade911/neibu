@@ -235,19 +235,81 @@ install_lnmp() {
     local INSTALL_SCRIPT="/www/server/panel/install/install_soft.sh"
     local BT_LOG_DIR="/tmp"
 
-    # 创建低内存绕过标记 (避免宝塔因内存不足拦截安装)
+    # ============================================================
+    # 检测已安装的组件
+    # ============================================================
+    local need_nginx=true need_mysql=true need_php=true need_redis=true
+
+    # 检测 Nginx (宝塔路径 + 系统路径)
+    if [[ -f "/www/server/nginx/sbin/nginx" ]] || command -v nginx &> /dev/null; then
+        local nginx_ver
+        nginx_ver=$(/www/server/nginx/sbin/nginx -v 2>&1 | grep -oP '[\d.]+' || nginx -v 2>&1 | grep -oP '[\d.]+' || echo "未知")
+        log_info "Nginx 已安装 ✓ (版本: ${nginx_ver})"
+        need_nginx=false
+    fi
+
+    # 检测 MySQL (宝塔路径 + 系统路径)
+    if [[ -f "/www/server/mysql/bin/mysql" ]] || command -v mysql &> /dev/null; then
+        local mysql_ver
+        mysql_ver=$(/www/server/mysql/bin/mysql --version 2>/dev/null | grep -oP '[\d.]+' | head -1 || mysql --version 2>/dev/null | grep -oP '[\d.]+' | head -1 || echo "未知")
+        log_info "MySQL 已安装 ✓ (版本: ${mysql_ver})"
+        need_mysql=false
+    fi
+
+    # 检测 PHP 8.2 (宝塔路径 + 系统路径)
+    if [[ -f "${PHP_BIN}" ]]; then
+        local php_ver
+        php_ver=$(${PHP_BIN} -v 2>/dev/null | head -1 | grep -oP '[\d.]+' | head -1 || echo "未知")
+        log_info "PHP 已安装 ✓ (版本: ${php_ver}，路径: ${PHP_BIN})"
+        need_php=false
+    elif command -v php &> /dev/null; then
+        local sys_php_ver
+        sys_php_ver=$(php -v 2>/dev/null | head -1 | grep -oP '[\d.]+' | head -1 || echo "未知")
+        log_info "检测到系统 PHP (版本: ${sys_php_ver})，但宝塔路径 ${PHP_BIN} 不存在"
+        log_warn "Xboard 需要宝塔管理的 PHP 8.2，将尝试通过宝塔安装"
+    fi
+
+    # 检测 Redis (宝塔路径 + 系统路径)
+    if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
+        local redis_ver
+        redis_ver=$(/www/server/redis/bin/redis-server --version 2>/dev/null | grep -oP 'v=[\d.]+' | cut -d= -f2 || redis-server --version 2>/dev/null | grep -oP 'v=[\d.]+' | cut -d= -f2 || echo "未知")
+        log_info "Redis 已安装 ✓ (版本: ${redis_ver})"
+        need_redis=false
+    fi
+
+    # 如果全部已安装，直接跳过
+    if [[ "$need_nginx" == "false" && "$need_mysql" == "false" && "$need_php" == "false" && "$need_redis" == "false" ]]; then
+        log_success "所有 LNMP 组件已安装，跳过安装步骤"
+        # 确保服务在运行
+        /etc/init.d/nginx start > /dev/null 2>&1 || true
+        /etc/init.d/mysqld start > /dev/null 2>&1 || true
+        /etc/init.d/redis start > /dev/null 2>&1 || true
+        systemctl start redis-server > /dev/null 2>&1 || true
+        /etc/init.d/php-fpm-${PHP_VERSION} start > /dev/null 2>&1 || true
+        return
+    fi
+
+    log_info "需要安装: $(
+        [[ "$need_nginx" == "true" ]] && echo -n "Nginx "
+        [[ "$need_mysql" == "true" ]] && echo -n "MySQL "
+        [[ "$need_php" == "true" ]] && echo -n "PHP "
+        [[ "$need_redis" == "true" ]] && echo -n "Redis "
+    )"
+
+    # 创建低内存绕过标记 (仅在需要安装时)
     mkdir -p /www/server/panel/install
     touch /www/server/panel/install/i_nginx.pl 2>/dev/null || true
     touch /www/server/panel/install/i_mysql.pl 2>/dev/null || true
     touch /www/server/panel/install/i_php.pl 2>/dev/null || true
 
+    # ============================================================
+    # 安装缺失的组件
+    # ============================================================
+
     # --- Nginx ---
-    # 参数 0 = 极速安装 (二进制包，几分钟完成)
-    if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
-        log_info "Nginx 已安装 ✓"
-    else
+    if [[ "$need_nginx" == "true" ]]; then
         local NGINX_LOG="${BT_LOG_DIR}/bt_install_nginx.log"
-        log_info "安装 Nginx (约需 2-5 分钟) ..."
+        log_info "安装 Nginx (极速安装，约需 2-5 分钟) ..."
         log_info "安装日志: ${NGINX_LOG}"
 
         # 方法1: 通过宝塔 install_soft.sh (参数 0 = 极速安装)
@@ -256,7 +318,7 @@ install_lnmp() {
         fi
 
         # 方法2: 直接下载宝塔 CDN 的极速安装脚本
-        if [[ ! -f "/www/server/nginx/sbin/nginx" ]]; then
+        if [[ ! -f "/www/server/nginx/sbin/nginx" ]] && ! command -v nginx &> /dev/null; then
             log_warn "install_soft.sh 安装 Nginx 失败，尝试直接下载安装脚本 ..."
             cd /tmp
             wget -q -O nginx_install.sh http://download.bt.cn/install/1/nginx.sh 2>/dev/null || \
@@ -267,13 +329,13 @@ install_lnmp() {
             fi
         fi
 
-        if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
+        if [[ -f "/www/server/nginx/sbin/nginx" ]] || command -v nginx &> /dev/null; then
             log_success "Nginx 安装成功"
         else
             log_warn "Nginx 自动安装失败，请在 aaPanel 面板中手动安装 Nginx"
             log_warn "安装日志: cat ${NGINX_LOG}"
             read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
-            if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
+            if [[ -f "/www/server/nginx/sbin/nginx" ]] || command -v nginx &> /dev/null; then
                 log_success "Nginx 已检测到 ✓"
             else
                 log_warn "仍未检测到 Nginx，后续步骤可能受影响"
@@ -282,21 +344,16 @@ install_lnmp() {
     fi
 
     # --- MySQL 5.7 ---
-    # 参数 0 = 极速安装 (二进制包，几分钟完成)
-    if [[ -f "/www/server/mysql/bin/mysql" ]]; then
-        log_info "MySQL 已安装 ✓"
-    else
+    if [[ "$need_mysql" == "true" ]]; then
         local MYSQL_LOG="${BT_LOG_DIR}/bt_install_mysql.log"
         log_info "安装 MySQL 5.7 (极速安装，约需 2-5 分钟) ..."
         log_info "安装日志: ${MYSQL_LOG}"
 
-        # 方法1: 通过宝塔 install_soft.sh (参数 0 = 极速安装)
         if [[ -f "$INSTALL_SCRIPT" ]]; then
             bash "$INSTALL_SCRIPT" 0 install mysql 5.7 > "${MYSQL_LOG}" 2>&1 || true
         fi
 
-        # 方法2: 直接下载宝塔 CDN 的极速安装脚本
-        if [[ ! -f "/www/server/mysql/bin/mysql" ]]; then
+        if [[ ! -f "/www/server/mysql/bin/mysql" ]] && ! command -v mysql &> /dev/null; then
             log_warn "install_soft.sh 安装 MySQL 失败，尝试直接下载安装脚本 ..."
             cd /tmp
             wget -q -O mysql_install.sh http://download.bt.cn/install/1/mysql.sh 2>/dev/null || \
@@ -307,13 +364,13 @@ install_lnmp() {
             fi
         fi
 
-        if [[ -f "/www/server/mysql/bin/mysql" ]]; then
+        if [[ -f "/www/server/mysql/bin/mysql" ]] || command -v mysql &> /dev/null; then
             log_success "MySQL 安装成功"
         else
             log_warn "MySQL 自动安装失败，请在 aaPanel 面板中手动安装 MySQL 5.7"
             log_warn "安装日志: cat ${MYSQL_LOG}"
             read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
-            if [[ -f "/www/server/mysql/bin/mysql" ]]; then
+            if [[ -f "/www/server/mysql/bin/mysql" ]] || command -v mysql &> /dev/null; then
                 log_success "MySQL 已检测到 ✓"
             else
                 log_warn "仍未检测到 MySQL，后续步骤可能受影响"
@@ -322,26 +379,20 @@ install_lnmp() {
     fi
 
     # --- PHP 8.2 ---
-    # 参数 0 = 极速安装 (二进制包，几分钟完成)
-    if [[ -f "${PHP_BIN}" ]]; then
-        log_info "PHP 8.2 已安装 ✓"
-    else
+    if [[ "$need_php" == "true" ]]; then
         local PHP_LOG="${BT_LOG_DIR}/bt_install_php.log"
         log_info "安装 PHP 8.2 (极速安装，约需 2-5 分钟) ..."
         log_info "安装日志: ${PHP_LOG}"
 
-        # 方法1: 通过宝塔 install_soft.sh (参数 0 = 极速安装)
         if [[ -f "$INSTALL_SCRIPT" ]]; then
             bash "$INSTALL_SCRIPT" 0 install php 8.2 > "${PHP_LOG}" 2>&1 || true
         fi
 
-        # 方法1b: 尝试 "php82" 格式 (部分宝塔版本使用此格式)
         if [[ ! -f "${PHP_BIN}" ]] && [[ -f "$INSTALL_SCRIPT" ]]; then
             log_info "尝试使用 php82 格式安装 ..."
             bash "$INSTALL_SCRIPT" 0 install php82 >> "${PHP_LOG}" 2>&1 || true
         fi
 
-        # 方法2: 直接下载宝塔 CDN 的极速安装脚本
         if [[ ! -f "${PHP_BIN}" ]]; then
             log_warn "install_soft.sh 安装 PHP 失败，尝试直接下载安装脚本 ..."
             cd /tmp
@@ -370,10 +421,7 @@ install_lnmp() {
     fi
 
     # --- Redis ---
-    # 模块代码: 12 = Redis (宝塔内部编号)，但 install_soft.sh 也接受名称
-    if [[ -f "/www/server/redis/bin/redis-server" ]] || command -v redis-server &> /dev/null; then
-        log_info "Redis 已安装 ✓"
-    else
+    if [[ "$need_redis" == "true" ]]; then
         local REDIS_LOG="${BT_LOG_DIR}/bt_install_redis.log"
         log_info "安装 Redis (约需 1-3 分钟) ..."
 
@@ -381,7 +429,6 @@ install_lnmp() {
             bash "$INSTALL_SCRIPT" 0 install redis 7.0 > "${REDIS_LOG}" 2>&1 || true
         fi
 
-        # 备用: 直接安装
         if [[ ! -f "/www/server/redis/bin/redis-server" ]] && ! command -v redis-server &> /dev/null; then
             log_warn "宝塔安装 Redis 失败，尝试系统包管理器安装 ..."
             if [[ "$PKG_MANAGER" == "apt-get" ]]; then
