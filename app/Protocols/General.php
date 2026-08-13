@@ -21,6 +21,7 @@ class General extends AbstractProtocol
         Server::TYPE_SOCKS,
         Server::TYPE_TUIC,
         Server::TYPE_HTTP,
+        Server::TYPE_NAIVE,
     ];
 
     protected $protocolRequirements = [
@@ -45,6 +46,7 @@ class General extends AbstractProtocol
                 Server::TYPE_SOCKS => self::buildSocks($item['password'], $item),
                 Server::TYPE_TUIC => self::buildTuic($item['password'], $item),
                 Server::TYPE_HTTP => self::buildHttp($item['password'], $item),
+                Server::TYPE_NAIVE => self::buildNaive($item['password'], $item),
                 default => '',
             };
         }
@@ -468,5 +470,21 @@ class General extends AbstractProtocol
         }
         $uri .= "#{$name}\r\n";
         return $uri;
+    }
+
+    /**
+     * NaïveProxy URI: naive+https://user:pass@host:port#name
+     */
+    public static function buildNaive($password, $server)
+    {
+        $name = rawurlencode($server['name']);
+        $addr = $server['host'];
+        $port = $server['port'];
+
+        // NaïveProxy 使用用户 UUID 作为 username 和 password
+        $user = rawurlencode($password);
+        $pass = rawurlencode($password);
+
+        return "naive+https://{$user}:{$pass}@{$addr}:{$port}#{$name}\r\n";
     }
 }

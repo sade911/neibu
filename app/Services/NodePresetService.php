@@ -429,10 +429,25 @@ class NodePresetService
                     ],
                 ],
             ],
+
+            // 10. NaïveProxy
+            'naive' => [
+                'type' => 'naive',
+                'label' => 'NaïveProxy',
+                'port' => 8447,
+                'server_port' => 8447,
+                'tags' => ['NaïveProxy', 'HTTP2'],
+                'protocol_settings' => [
+                    'tls' => [
+                        'server_name' => '',
+                        'allow_insecure' => true,
+                    ],
+                ],
+            ],
         ];
 
         // ============================================================
-        // WARP 9 种 — 基于直连节点，修改端口 + 添加 WARP 出站
+        // WARP 10 种 — 基于直连节点，修改端口 + 添加 WARP 出站
         // ============================================================
 
         $warpPortMap = [
@@ -445,6 +460,7 @@ class NodePresetService
             'ss_2022' => 18388,
             'ss_classic' => 18389,
             'tuic_v5' => 18446,
+            'naive' => 18447,
         ];
 
         $warpPresets = [];
