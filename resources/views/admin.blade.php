@@ -68,6 +68,7 @@
     @foreach($scripts as $js)
       <script type="module" crossorigin src="/assets/admin/{{ $js }}"></script>
     @endforeach
+    <script src="/assets/admin/assets/xb-extensions.js" defer></script>
   @else
     {{-- Fallback: hardcoded paths for backward compatibility --}}
     <script type="module" crossorigin src="/assets/admin/assets/index.js"></script>
