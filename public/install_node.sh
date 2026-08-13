@@ -562,7 +562,10 @@ SYNCEOF
 chmod +x "${CONFIG_DIR}/sync_users.sh"
 
 CRON_LINE="* * * * * ${CONFIG_DIR}/sync_users.sh >> /var/log/xboard-sync.log 2>&1"
-(crontab -l 2>/dev/null | grep -v 'sync_users.sh'; echo "$CRON_LINE") | crontab -
+EXISTING_CRON=$(crontab -l 2>/dev/null || true)
+FILTERED_CRON=$(echo "$EXISTING_CRON" | grep -v 'sync_users.sh' || true)
+echo "${FILTERED_CRON}
+${CRON_LINE}" | crontab -
 echo -e "  ${GREEN}OK${NC}"
 
 # [13/13] Firewall + systemd + start
