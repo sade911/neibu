@@ -314,7 +314,7 @@ source "${CONFIG_DIR}/.env" 2>/dev/null || exit 1
 NODES_RESP=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/nodes" \
     -H "Content-Type: application/json" \
     -d "{\"machine_id\": ${MACHINE_ID}, \"token\": \"${TOKEN}\"}" 2>/dev/null)
-NODE_ID=$(echo "$NODES_RESP" | jq -r '.data[0].id // empty' 2>/dev/null)
+NODE_ID=$(echo "$NODES_RESP" | jq -r '.nodes[0].id // empty' 2>/dev/null)
 [[ -z "$NODE_ID" ]] && exit 1
 
 USERS_RESP=$(curl -s "${PANEL_URL}/api/v2/server/user?token=${TOKEN}&node_id=${NODE_ID}" 2>/dev/null)
