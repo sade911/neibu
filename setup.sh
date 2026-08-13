@@ -229,27 +229,6 @@ install_aapanel() {
 # Step 3: 安装 LNMP 环境
 # ============================================================
 
-# 等待软件安装完成的辅助函数
-# 用法: wait_for_install <检测文件路径> <超时秒数> <软件名称>
-wait_for_install() {
-    local check_file="$1"
-    local timeout="$2"
-    local name="$3"
-    local elapsed=0
-    local interval=30
-
-    while [[ $elapsed -lt $timeout ]]; do
-        if [[ -f "$check_file" ]]; then
-            return 0
-        fi
-        sleep $interval
-        elapsed=$((elapsed + interval))
-        local remaining=$(( (timeout - elapsed) / 60 ))
-        log_info "${name} 安装中... 已等待 $((elapsed / 60)) 分钟 (最多还需 ${remaining} 分钟)"
-    done
-    return 1
-}
-
 install_lnmp() {
     log_step "Step 3/9: 安装 LNMP 环境"
 
@@ -263,7 +242,7 @@ install_lnmp() {
     touch /www/server/panel/install/i_php.pl 2>/dev/null || true
 
     # --- Nginx ---
-    # 模块代码: 0 = Web 服务器 (Nginx/Apache)
+    # 参数 0 = 极速安装 (二进制包，几分钟完成)
     if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
         log_info "Nginx 已安装 ✓"
     else
@@ -271,17 +250,17 @@ install_lnmp() {
         log_info "安装 Nginx (约需 2-5 分钟) ..."
         log_info "安装日志: ${NGINX_LOG}"
 
-        # 方法1: 通过宝塔 install_soft.sh (模块代码 0 = Web 服务器)
+        # 方法1: 通过宝塔 install_soft.sh (参数 0 = 极速安装)
         if [[ -f "$INSTALL_SCRIPT" ]]; then
             bash "$INSTALL_SCRIPT" 0 install nginx 1.24 > "${NGINX_LOG}" 2>&1 || true
         fi
 
-        # 方法2: 直接下载宝塔 CDN 的 Nginx 安装脚本
+        # 方法2: 直接下载宝塔 CDN 的极速安装脚本
         if [[ ! -f "/www/server/nginx/sbin/nginx" ]]; then
             log_warn "install_soft.sh 安装 Nginx 失败，尝试直接下载安装脚本 ..."
             cd /tmp
-            wget -q -O nginx_install.sh http://download.bt.cn/install/0/nginx.sh 2>/dev/null || \
-            curl -sSL -o nginx_install.sh http://download.bt.cn/install/0/nginx.sh 2>/dev/null || true
+            wget -q -O nginx_install.sh http://download.bt.cn/install/1/nginx.sh 2>/dev/null || \
+            curl -sSL -o nginx_install.sh http://download.bt.cn/install/1/nginx.sh 2>/dev/null || true
             if [[ -f "nginx_install.sh" ]]; then
                 bash nginx_install.sh install 1.24 >> "${NGINX_LOG}" 2>&1 || true
                 rm -f nginx_install.sh
@@ -303,47 +282,25 @@ install_lnmp() {
     fi
 
     # --- MySQL 5.7 ---
-    # 模块代码: 1 = 数据库 (MySQL/MariaDB)
+    # 参数 0 = 极速安装 (二进制包，几分钟完成)
     if [[ -f "/www/server/mysql/bin/mysql" ]]; then
         log_info "MySQL 已安装 ✓"
     else
         local MYSQL_LOG="${BT_LOG_DIR}/bt_install_mysql.log"
-        log_info "安装 MySQL 5.7 (编译安装，约需 15-40 分钟，请耐心等待) ..."
+        log_info "安装 MySQL 5.7 (极速安装，约需 2-5 分钟) ..."
         log_info "安装日志: ${MYSQL_LOG}"
 
-        # 方法1: 通过宝塔 install_soft.sh (模块代码 1 = 数据库)
+        # 方法1: 通过宝塔 install_soft.sh (参数 0 = 极速安装)
         if [[ -f "$INSTALL_SCRIPT" ]]; then
-            bash "$INSTALL_SCRIPT" 1 install mysql 5.7 > "${MYSQL_LOG}" 2>&1 &
-            local mysql_pid=$!
-
-            # MySQL 编译安装耗时很长，使用轮询等待
-            log_info "MySQL 编译安装已启动 (PID: ${mysql_pid})，轮询等待中 ..."
-            wait_for_install "/www/server/mysql/bin/mysql" 2400 "MySQL" || true
-
-            # 如果进程仍在运行但文件已存在，等进程结束
-            if kill -0 $mysql_pid 2>/dev/null; then
-                if [[ -f "/www/server/mysql/bin/mysql" ]]; then
-                    wait $mysql_pid 2>/dev/null || true
-                else
-                    # 超时仍未完成，继续等待进程自然结束 (最多再等 10 分钟)
-                    log_warn "MySQL 安装超时，继续等待进程完成 ..."
-                    local extra_wait=0
-                    while kill -0 $mysql_pid 2>/dev/null && [[ $extra_wait -lt 600 ]]; do
-                        sleep 30
-                        extra_wait=$((extra_wait + 30))
-                    done
-                    kill $mysql_pid 2>/dev/null || true
-                    wait $mysql_pid 2>/dev/null || true
-                fi
-            fi
+            bash "$INSTALL_SCRIPT" 0 install mysql 5.7 > "${MYSQL_LOG}" 2>&1 || true
         fi
 
-        # 方法2: 直接下载宝塔 CDN 的 MySQL 安装脚本
+        # 方法2: 直接下载宝塔 CDN 的极速安装脚本
         if [[ ! -f "/www/server/mysql/bin/mysql" ]]; then
             log_warn "install_soft.sh 安装 MySQL 失败，尝试直接下载安装脚本 ..."
             cd /tmp
-            wget -q -O mysql_install.sh http://download.bt.cn/install/0/mysql.sh 2>/dev/null || \
-            curl -sSL -o mysql_install.sh http://download.bt.cn/install/0/mysql.sh 2>/dev/null || true
+            wget -q -O mysql_install.sh http://download.bt.cn/install/1/mysql.sh 2>/dev/null || \
+            curl -sSL -o mysql_install.sh http://download.bt.cn/install/1/mysql.sh 2>/dev/null || true
             if [[ -f "mysql_install.sh" ]]; then
                 bash mysql_install.sh install 5.7 >> "${MYSQL_LOG}" 2>&1 || true
                 rm -f mysql_install.sh
@@ -365,53 +322,31 @@ install_lnmp() {
     fi
 
     # --- PHP 8.2 ---
-    # 模块代码: 3 = PHP
+    # 参数 0 = 极速安装 (二进制包，几分钟完成)
     if [[ -f "${PHP_BIN}" ]]; then
         log_info "PHP 8.2 已安装 ✓"
     else
         local PHP_LOG="${BT_LOG_DIR}/bt_install_php.log"
-        log_info "安装 PHP 8.2 (编译安装，约需 10-30 分钟，请耐心等待) ..."
+        log_info "安装 PHP 8.2 (极速安装，约需 2-5 分钟) ..."
         log_info "安装日志: ${PHP_LOG}"
 
-        local php_installed=false
-
-        # 方法1: 通过宝塔 install_soft.sh (模块代码 3 = PHP)
+        # 方法1: 通过宝塔 install_soft.sh (参数 0 = 极速安装)
         if [[ -f "$INSTALL_SCRIPT" ]]; then
-            # 尝试版本格式 "8.2"
-            bash "$INSTALL_SCRIPT" 3 install php 8.2 > "${PHP_LOG}" 2>&1 &
-            local php_pid=$!
-
-            log_info "PHP 编译安装已启动 (PID: ${php_pid})，轮询等待中 ..."
-            wait_for_install "${PHP_BIN}" 1800 "PHP 8.2" || true
-
-            if kill -0 $php_pid 2>/dev/null; then
-                if [[ -f "${PHP_BIN}" ]]; then
-                    wait $php_pid 2>/dev/null || true
-                else
-                    log_warn "PHP 安装超时，继续等待进程完成 ..."
-                    local extra_wait=0
-                    while kill -0 $php_pid 2>/dev/null && [[ $extra_wait -lt 600 ]]; do
-                        sleep 30
-                        extra_wait=$((extra_wait + 30))
-                    done
-                    kill $php_pid 2>/dev/null || true
-                    wait $php_pid 2>/dev/null || true
-                fi
-            fi
+            bash "$INSTALL_SCRIPT" 0 install php 8.2 > "${PHP_LOG}" 2>&1 || true
         fi
 
         # 方法1b: 尝试 "php82" 格式 (部分宝塔版本使用此格式)
         if [[ ! -f "${PHP_BIN}" ]] && [[ -f "$INSTALL_SCRIPT" ]]; then
             log_info "尝试使用 php82 格式安装 ..."
-            bash "$INSTALL_SCRIPT" 3 install php82 > "${PHP_LOG}" 2>&1 || true
+            bash "$INSTALL_SCRIPT" 0 install php82 >> "${PHP_LOG}" 2>&1 || true
         fi
 
-        # 方法2: 直接下载宝塔 CDN 的 PHP 安装脚本
+        # 方法2: 直接下载宝塔 CDN 的极速安装脚本
         if [[ ! -f "${PHP_BIN}" ]]; then
             log_warn "install_soft.sh 安装 PHP 失败，尝试直接下载安装脚本 ..."
             cd /tmp
-            wget -q -O php_install.sh http://download.bt.cn/install/0/php.sh 2>/dev/null || \
-            curl -sSL -o php_install.sh http://download.bt.cn/install/0/php.sh 2>/dev/null || true
+            wget -q -O php_install.sh http://download.bt.cn/install/1/php.sh 2>/dev/null || \
+            curl -sSL -o php_install.sh http://download.bt.cn/install/1/php.sh 2>/dev/null || true
             if [[ -f "php_install.sh" ]]; then
                 bash php_install.sh install 82 >> "${PHP_LOG}" 2>&1 || true
                 rm -f php_install.sh
