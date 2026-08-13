@@ -16,7 +16,7 @@ class NodePresetService
     private const WARP_OUTBOUND = [
         [
             'tag' => 'warp',
-            'type' => 'wireguard',
+            'protocol' => 'wireguard',
             'private_key' => 'WARP_SECRET_KEY_PLACEHOLDER',
             'local_address' => [
                 '172.16.0.2/32',
