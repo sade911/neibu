@@ -61,7 +61,6 @@ object ConfigBuilder {
                 "type" to "udp",
                 "server" to "223.5.5.5",
                 "server_port" to 53,
-                "detour" to "direct",
             ),
             // 远程 DoH DNS（走代理）
             mapOf(
@@ -79,7 +78,6 @@ object ConfigBuilder {
                 "server" to "223.5.5.5",
                 "server_port" to 443,
                 "domain_resolver" to "dns-resolver",
-                "detour" to "direct",
             ),
             // 阻断 DNS
             mapOf(
