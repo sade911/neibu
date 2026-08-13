@@ -575,20 +575,67 @@ configure_php() {
     local PHP_EXT_SCRIPT="/www/server/panel/install/install_soft.sh"
     local PHP_EXT_DIR="/www/server/php/${PHP_VERSION}/lib/php/extensions"
 
-    # 安装必要扩展
+    # ============================================================
+    # 先检测所有扩展状态
+    # ============================================================
     local extensions=("fileinfo" "redis" "swoole4" "event")
     local failed_exts=()
+    local need_install=()
+    local all_loaded
+    all_loaded=$(${PHP_BIN} -m 2>/dev/null || echo "")
+
+    echo ""
+    echo -e "${BLUE}┌─────────── PHP 扩展检测 ───────────┐${NC}"
 
     for ext in "${extensions[@]}"; do
         local ext_check="${ext}"
         [[ "$ext" == "swoole4" ]] && ext_check="swoole"
 
-        if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
-            log_info "PHP 扩展 ${ext_check} 已安装 ✓"
-            continue
+        if echo "$all_loaded" | grep -qi "^${ext_check}$"; then
+            # 已加载，尝试获取版本
+            local ext_ver
+            ext_ver=$(${PHP_BIN} -r "echo phpversion('${ext_check}');" 2>/dev/null || echo "")
+            if [[ -n "$ext_ver" && "$ext_ver" != "" ]]; then
+                echo -e "${BLUE}│${NC}  ${ext_check}: ${GREEN}已安装 ✓${NC} (${ext_ver})"
+            else
+                echo -e "${BLUE}│${NC}  ${ext_check}: ${GREEN}已安装 ✓${NC}"
+            fi
+        else
+            # 检查 .so 文件是否存在但未启用
+            local so_found
+            so_found=$(find /www/server/php/${PHP_VERSION}/ -name "${ext_check}.so" 2>/dev/null | head -1)
+            if [[ -n "$so_found" ]]; then
+                echo -e "${BLUE}│${NC}  ${ext_check}: ${YELLOW}已编译但未启用${NC} (.so 存在)"
+            else
+                echo -e "${BLUE}│${NC}  ${ext_check}: ${RED}未安装 ✗${NC}"
+            fi
+            need_install+=("${ext}")
         fi
+    done
 
-        log_info "安装 PHP 扩展: ${ext} ..."
+    echo -e "${BLUE}└────────────────────────────────────┘${NC}"
+    echo ""
+
+    # 如果全部已安装，跳过安装步骤
+    if [[ ${#need_install[@]} -eq 0 ]]; then
+        log_success "所有 PHP 扩展已安装，跳过安装步骤"
+    else
+        log_info "需要安装: $(
+            for ni in "${need_install[@]}"; do
+                local nc="${ni}"
+                [[ "$ni" == "swoole4" ]] && nc="swoole"
+                echo -n "${nc} "
+            done
+        )"
+
+    # ============================================================
+    # 安装缺失的扩展
+    # ============================================================
+    for ext in "${need_install[@]}"; do
+        local ext_check="${ext}"
+        [[ "$ext" == "swoole4" ]] && ext_check="swoole"
+
+        log_info "安装 PHP 扩展: ${ext_check} ..."
 
         local PHP_DIR="/www/server/php/${PHP_VERSION}"
         local PHPIZE="${PHP_DIR}/bin/phpize"
@@ -706,6 +753,7 @@ configure_php() {
             failed_exts+=("${ext_check}")
         fi
     done
+    fi  # end if need_install
 
     # 如果有关键扩展安装失败，提示手动安装
     if [[ ${#failed_exts[@]} -gt 0 ]]; then
