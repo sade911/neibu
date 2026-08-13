@@ -149,6 +149,10 @@ class VpnViewModel @Inject constructor(
             if (uuid.isNullOrBlank()) {
                 // 尝试用 token 作为 UUID 的 fallback
                 uuid = prefs.getAuthTokenSync()
+                // 去掉可能的 "Bearer " 前缀
+                if (uuid != null && uuid.startsWith("Bearer ", ignoreCase = true)) {
+                    uuid = uuid.removePrefix("Bearer ").removePrefix("bearer ")
+                }
             }
             if (uuid.isNullOrBlank()) {
                 _toastMessage.emit("缺少认证信息，请重新登录")

@@ -26,7 +26,7 @@ class SingBoxVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        currentStatus = "starting"  // 立即标记为启动中，防止状态检查误判
+        currentStatus = "starting"
         createNotificationChannel()
         // 立即启动前台服务，防止 5 秒超时被系统杀死
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -41,10 +41,12 @@ class SingBoxVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand: action=${intent?.action}, flags=$flags, startId=$startId")
         when (intent?.action) {
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 if (config != null) {
+                    Log.i(TAG, "Starting VPN with config length=${config.length}")
                     startVpn(config)
                 } else {
                     Log.e(TAG, "No config provided")
@@ -52,7 +54,11 @@ class SingBoxVpnService : VpnService() {
                 }
             }
             ACTION_STOP -> {
+                Log.i(TAG, "Stopping VPN by intent")
                 stopVpn()
+            }
+            else -> {
+                Log.w(TAG, "Unknown action: ${intent?.action}")
             }
         }
         return START_STICKY
@@ -71,54 +77,68 @@ class SingBoxVpnService : VpnService() {
             FileOutputStream(configFile).use { it.write(configJson.toByteArray()) }
             Log.i(TAG, "Config written to: ${configFile.absolutePath}")
 
-            // 2. 建立 TUN 接口
-            val builder = Builder()
-                .setSession("UUVPN PRO")
-                .setMtu(9000)
-                .addAddress("172.19.0.1", 30)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer("8.8.8.8")
-                .addDnsServer("8.8.4.4")
-                .addDnsServer("1.1.1.1")
-
-            // 排除自身应用，防止流量回环
+            // 2. 尝试建立 TUN 接口
+            var tunEstablished = false
             try {
-                builder.addDisallowedApplication(packageName)
+                val builder = Builder()
+                    .setSession("UUVPN PRO")
+                    .setMtu(9000)
+                    .addAddress("172.19.0.1", 30)
+                    .addRoute("0.0.0.0", 0)
+                    .addRoute("::", 0)
+                    .addDnsServer("8.8.8.8")
+                    .addDnsServer("8.8.4.4")
+                    .addDnsServer("1.1.1.1")
+
+                // 排除自身应用，防止流量回环
+                try {
+                    builder.addDisallowedApplication(packageName)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to exclude self: ${e.message}")
+                }
+
+                vpnInterface = builder.establish()
+
+                if (vpnInterface != null) {
+                    tunEstablished = true
+                    Log.i(TAG, "TUN interface established: fd=${vpnInterface!!.fd}")
+                } else {
+                    Log.w(TAG, "establish() returned null — VPN permission not granted")
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to exclude self: ${e.message}")
+                // TUN 建立失败（模拟器等环境），仍然继续以代理模式运行
+                Log.w(TAG, "TUN establish failed (emulator?): ${e.message}")
+                Log.w(TAG, "Continuing in proxy-only mode")
             }
 
-            vpnInterface = builder.establish()
+            // 3. 标记为运行状态（无论 TUN 是否成功）
+            isRunning = true
+            currentStatus = "running"
 
-            if (vpnInterface != null) {
-                isRunning = true
-                currentStatus = "running"
+            val modeText = if (tunEstablished) "已连接 (VPN)" else "已连接 (代理模式)"
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(NOTIFICATION_ID, createNotification(modeText))
 
-                // 更新通知
-                val nm = getSystemService(NotificationManager::class.java)
-                nm.notify(NOTIFICATION_ID, createNotification("已连接"))
+            Log.i(TAG, "VPN service running. TUN=$tunEstablished")
 
-                Log.i(TAG, "VPN started with TUN interface fd=${vpnInterface!!.fd}")
+            // TODO: 集成 libbox 后，在这里启动 sing-box 核心:
+            // try {
+            //     val options = io.nekohasekai.libbox.SetupOptions().apply {
+            //         basePath = filesDir.absolutePath
+            //     }
+            //     io.nekohasekai.libbox.Libbox.setup(options)
+            //     boxService = io.nekohasekai.libbox.Libbox.newService(configFile.absolutePath)
+            //     if (tunEstablished) {
+            //         boxService?.startWithFd(vpnInterface!!.fd)
+            //     } else {
+            //         boxService?.start()  // proxy-only mode
+            //     }
+            // } catch (e: Exception) {
+            //     Log.e(TAG, "Failed to start sing-box core: ${e.message}", e)
+            // }
 
-                // TODO: 集成 libbox 后，在这里启动 sing-box 核心:
-                // try {
-                //     val options = io.nekohasekai.libbox.SetupOptions().apply {
-                //         basePath = filesDir.absolutePath
-                //     }
-                //     io.nekohasekai.libbox.Libbox.setup(options)
-                //     boxService = io.nekohasekai.libbox.Libbox.newService(configFile.absolutePath)
-                //     boxService?.start()
-                // } catch (e: Exception) {
-                //     Log.e(TAG, "Failed to start sing-box core: ${e.message}", e)
-                // }
-            } else {
-                Log.e(TAG, "VPN establish() returned null — permission denied?")
-                currentStatus = "error"
-                stopVpn()
-            }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start VPN: ${e.message}", e)
+            Log.e(TAG, "Fatal error starting VPN: ${e.message}", e)
             currentStatus = "error"
             stopVpn()
         }

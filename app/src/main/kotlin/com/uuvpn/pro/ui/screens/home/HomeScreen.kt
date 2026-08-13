@@ -35,6 +35,8 @@ fun HomeScreen(
     val trafficStats by viewModel.trafficStats.collectAsState()
     val connectionTime by viewModel.connectionTimeFormatted.collectAsState()
     val context = LocalContext.current
+    // 获取 Activity Context（VpnService.prepare 必须用 Activity）
+    val activity = context as? Activity
 
     val isConnected = vpnState == VpnState.CONNECTED
 
@@ -63,14 +65,18 @@ fun HomeScreen(
             // 断开不需要权限检查
             viewModel.toggleConnection()
         } else {
-            // 连接前先检查 VPN 权限
-            val prepareIntent = VpnService.prepare(context)
-            if (prepareIntent != null) {
-                // 需要用户授权
-                vpnPermissionLauncher.launch(prepareIntent)
+            // 连接前先检查 VPN 权限 — 必须用 Activity context
+            if (activity != null) {
+                val prepareIntent = VpnService.prepare(activity)
+                if (prepareIntent != null) {
+                    // 需要用户授权
+                    vpnPermissionLauncher.launch(prepareIntent)
+                } else {
+                    // 已有权限，直接连接
+                    viewModel.toggleConnection()
+                }
             } else {
-                // 已有权限，直接连接
-                viewModel.toggleConnection()
+                Toast.makeText(context, "无法获取 Activity 上下文", Toast.LENGTH_SHORT).show()
             }
         }
     }
