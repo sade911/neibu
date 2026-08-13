@@ -174,23 +174,24 @@ fi
 echo -e "${BLUE}[6/12] 安装 NaïveProxy (caddy-naive) ...${NC}"
 NAIVE_BIN="/usr/local/bin/caddy-naive"
 if [[ ! -f "$NAIVE_BIN" ]]; then
-    # 使用预编译的 caddy-naive
-    NAIVE_VER=$(curl -s https://api.github.com/repos/nicholascao/naiveproxy-plugin/releases/latest | jq -r '.tag_name // "v2.8.9"' 2>/dev/null)
-    if [[ -z "$NAIVE_VER" || "$NAIVE_VER" == "null" ]]; then
-        # Fallback: 使用 klzgrad/forwardproxy caddy 构建
-        NAIVE_VER="v2.8.9"
-    fi
-    NAIVE_ASSET="caddy-forwardproxy-naive_linux_${ARCH}"
-    NAIVE_URL="https://github.com/nicholascao/naiveproxy-plugin/releases/download/${NAIVE_VER}/${NAIVE_ASSET}"
-    curl -fsSL -o "$NAIVE_BIN" "$NAIVE_URL" 2>/dev/null && chmod +x "$NAIVE_BIN" || {
-        # Fallback: 用 Go 安装 xcaddy 构建
-        echo -e "  ${YELLOW}预编译不可用，尝试 xcaddy 构建...${NC}"
-        if command -v go &>/dev/null; then
-            go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-            ~/go/bin/xcaddy build --with github.com/caddyserver/forwardproxy@caddy2=github.com/klzgrad/forwardproxy@naive --output "$NAIVE_BIN"
-        else
-            echo -e "  ${RED}✗ 需要 Go 环境来构建 caddy-naive，跳过${NC}"
-            NAIVE_BIN=""
+    # 方法1: Caddy 官方构建 API (自动编译含 naive 模块的 caddy)
+    CADDY_ARCH="amd64"
+    [[ "$ARCH" == "arm64" ]] && CADDY_ARCH="arm64"
+    curl -fsSL -o "$NAIVE_BIN" \
+        "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}&p=github.com%2Fcaddyserver%2Fforwardproxy%40caddy2%3Dgithub.com%2Fklzgrad%2Fforwardproxy%40naive" \
+        2>/dev/null && chmod +x "$NAIVE_BIN" || {
+        # 方法2: 直接下载 naiveproxy 官方 release (服务端就是 naive 本身)
+        echo -e "  ${YELLOW}Caddy API 不可用，尝试 naiveproxy 官方 release...${NC}"
+        NP_VER=$(curl -s https://api.github.com/repos/klzgrad/naiveproxy/releases/latest 2>/dev/null | jq -r '.tag_name // "v136.0.7103.48-1"') || NP_VER="v136.0.7103.48-1"
+        NP_ASSET="naiveproxy-${NP_VER}-linux-x64.tar.xz"
+        [[ "$ARCH" == "arm64" ]] && NP_ASSET="naiveproxy-${NP_VER}-linux-arm64.tar.xz"
+        curl -fsSL -o /tmp/naive.tar.xz "https://github.com/klzgrad/naiveproxy/releases/download/${NP_VER}/${NP_ASSET}" 2>/dev/null
+        if [[ -f /tmp/naive.tar.xz ]]; then
+            mkdir -p /tmp/naive-extract
+            tar -xJf /tmp/naive.tar.xz -C /tmp/naive-extract/ 2>/dev/null
+            find /tmp/naive-extract -name "naive" -type f -exec cp {} "$NAIVE_BIN" \; 2>/dev/null
+            chmod +x "$NAIVE_BIN" 2>/dev/null || true
+            rm -rf /tmp/naive.tar.xz /tmp/naive-extract
         fi
     }
 fi
