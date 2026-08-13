@@ -178,15 +178,17 @@ if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
         -subj "/CN=www.bing.com" 2>/dev/null
 fi
 REALITY_OUTPUT=$(xray x25519 2>/dev/null || true)
-REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep 'Private key:' | awk '{print $3}' || true)
-REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep 'Public key:' | awk '{print $3}' || true)
+# Xray 26.x format: "PrivateKey: xxx" and "Password (PublicKey): xxx"
+# Older format: "Private key: xxx" and "Public key: xxx"
+REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep -i 'privatekey\|private key' | awk '{print $NF}' || true)
+REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep -i 'publickey\|public key' | awk '{print $NF}' || true)
 REALITY_SHORT_ID=$(openssl rand -hex 4)
-if [[ -z "$REALITY_PRIVATE_KEY" ]]; then
-    echo -e "  ${RED}FAIL: xray x25519 failed${NC}"
-    echo -e "  Debug: $(xray x25519 2>&1 || true)"
+if [[ -z "$REALITY_PRIVATE_KEY" || -z "$REALITY_PUBLIC_KEY" ]]; then
+    echo -e "  ${RED}FAIL: xray x25519 parse error${NC}"
+    echo -e "  Output: $REALITY_OUTPUT"
     exit 1
 fi
-echo -e "  ${GREEN}OK${NC}"
+echo -e "  ${GREEN}OK: Reality ${REALITY_PUBLIC_KEY:0:16}...${NC}"
 
 # [9/13] Random ports
 echo -e "${BLUE}[9/13] Assigning random ports ...${NC}"
