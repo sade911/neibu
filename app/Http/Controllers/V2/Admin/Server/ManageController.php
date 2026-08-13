@@ -265,6 +265,50 @@ class ManageController extends Controller
     }
 
     /**
+     * 获取所有权限组（供前端一键权限组功能使用）
+     */
+    public function getGroups()
+    {
+        $groups = \App\Models\ServerGroup::all(['id', 'name']);
+        return $this->success($groups);
+    }
+
+    /**
+     * 批量设置权限组
+     */
+    public function batchSetGroup(Request $request)
+    {
+        $params = $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+            'group_ids' => 'required|array|min:1',
+            'group_ids.*' => 'integer',
+        ]);
+
+        $ids = $params['ids'];
+        if (empty($ids)) {
+            return $this->fail([400, '请选择要设置的节点']);
+        }
+
+        $groupIds = array_map('strval', $params['group_ids']);
+
+        try {
+            $servers = Server::whereIn('id', $ids)->get();
+            DB::transaction(function () use ($servers, $groupIds) {
+                foreach ($servers as $server) {
+                    $server->update(['group_ids' => $groupIds]);
+                }
+            });
+
+            Log::info("Servers " . implode(',', $ids) . " group_ids set to [" . implode(',', $groupIds) . "] by admin");
+            return $this->success(['updated' => count($ids)]);
+        } catch (\Exception $e) {
+            Log::error($e);
+            return $this->fail([500, '批量设置权限组失败']);
+        }
+    }
+
+    /**
      * 复制节点
      * @param \Illuminate\Http\Request $request
      * @return \Illuminate\Http\JsonResponse

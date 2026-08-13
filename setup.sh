@@ -989,6 +989,99 @@ deploy_xboard() {
     log_info "初始化前端主题 ..."
     git submodule update --init --recursive --force 2>&1
 
+    # ====== 注入前端扩展 (一键权限组等) ======
+    local ADMIN_DIR="${SITE_DIR}/public/assets/admin"
+    if [[ -d "$ADMIN_DIR" ]]; then
+        log_info "注入前端扩展功能 ..."
+
+        # 创建扩展 JS 文件
+        cat > "${ADMIN_DIR}/assets/xb-extensions.js" << 'EXTJS'
+(function(){
+  'use strict';
+  var AP=window.settings?.secure_path||'';
+  var BASE='/api/v2/'+AP;
+
+  async function fetchGroups(){
+    try{
+      var t=localStorage.getItem('admin_token')||'';
+      var r=await fetch(BASE+'/server/manage/getGroups',{headers:{'Authorization':t}});
+      var d=await r.json();return d?.data||[];
+    }catch(e){return[];}
+  }
+
+  async function batchSetGroup(ids,gids){
+    var t=localStorage.getItem('admin_token')||'';
+    var r=await fetch(BASE+'/server/manage/batchSetGroup',{
+      method:'POST',headers:{'Authorization':t,'Content-Type':'application/json'},
+      body:JSON.stringify({ids:ids,group_ids:gids})
+    });return r.json();
+  }
+
+  function createModal(ids,groups){
+    var ex=document.getElementById('xb-group-modal');if(ex)ex.remove();
+    var ov=document.createElement('div');ov.id='xb-group-modal';
+    ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    var m=document.createElement('div');
+    m.style.cssText='background:var(--background,#fff);border-radius:12px;padding:24px;min-width:400px;max-width:500px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);color:var(--foreground,#333);';
+    var cbs=groups.map(function(g){return '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;cursor:pointer;"><input type="checkbox" value="'+g.id+'" style="width:16px;height:16px;cursor:pointer;"><span style="font-size:14px;">'+g.name+'</span></label>';}).join('');
+    m.innerHTML='<h3 style="margin:0 0 8px;font-size:18px;font-weight:600;">一键设置权限组</h3><p style="margin:0 0 16px;font-size:14px;color:var(--muted-foreground,#888);">为选中的 <strong>'+ids.length+'</strong> 个节点分配权限组</p><div style="max-height:300px;overflow-y:auto;border:1px solid var(--border,#e5e5e5);border-radius:8px;margin-bottom:16px;">'+(cbs||'<p style="padding:16px;text-align:center;color:#999;">暂无权限组，请先创建</p>')+'</div><div style="display:flex;gap:8px;justify-content:flex-end;"><button id="xb-gc" style="padding:8px 16px;border-radius:6px;border:1px solid var(--border,#ddd);background:transparent;cursor:pointer;font-size:14px;">取消</button><button id="xb-gk" style="padding:8px 16px;border-radius:6px;border:none;background:var(--primary,#2563eb);color:white;cursor:pointer;font-size:14px;font-weight:500;">确认设置</button></div>';
+    ov.appendChild(m);document.body.appendChild(ov);
+    ov.addEventListener('click',function(e){if(e.target===ov)ov.remove();});
+    document.getElementById('xb-gc').addEventListener('click',function(){ov.remove();});
+    document.getElementById('xb-gk').addEventListener('click',async function(){
+      var chk=m.querySelectorAll('input[type="checkbox"]:checked');
+      var gids=Array.from(chk).map(function(c){return parseInt(c.value);});
+      if(!gids.length){alert('请至少选择一个权限组');return;}
+      this.textContent='设置中...';this.disabled=true;
+      try{var r=await batchSetGroup(ids,gids);if(r?.data){ov.remove();window.location.reload();}else{alert('设置失败');}}catch(e){alert('请求失败');}
+      this.textContent='确认设置';this.disabled=false;
+    });
+  }
+
+  new MutationObserver(function(){
+    document.querySelectorAll('[role="menu"],[data-radix-menu-content]').forEach(function(menu){
+      if(menu.dataset.xbg)return;
+      var items=menu.querySelectorAll('[role="menuitem"]');
+      var hasReset=false;
+      items.forEach(function(i){if(i.textContent.match(/重置流量|Reset Traffic/))hasReset=true;});
+      if(!hasReset)return;
+      menu.dataset.xbg='1';
+      var last=items[items.length-1];if(!last)return;
+      var sep=document.createElement('div');sep.setAttribute('role','separator');
+      var existSep=menu.querySelector('[role="separator"]');
+      if(existSep)sep.className=existSep.className;else sep.style.cssText='height:1px;background:var(--border,#e5e5e5);margin:4px 0;';
+      var gi=document.createElement('div');gi.setAttribute('role','menuitem');gi.className=last.className;
+      gi.style.cssText=last.style.cssText+'cursor:pointer;color:var(--primary,#2563eb);';
+      gi.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;flex-shrink:0;"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg><span>一键权限组</span>';
+      gi.addEventListener('click',async function(e){
+        e.preventDefault();e.stopPropagation();
+        var cbs=document.querySelectorAll('table input[type="checkbox"]:checked,[data-state="checked"]');
+        var ids=[];
+        cbs.forEach(function(cb){var row=cb.closest('tr,[data-row-id]');if(row){var id=row.dataset?.rowId||row.querySelector('td')?.textContent?.trim();if(id&&!isNaN(id))ids.push(parseInt(id));}});
+        document.body.click();
+        var groups=await fetchGroups();
+        createModal(ids.length>0?ids:[],groups);
+      });
+      if(last.parentNode){last.parentNode.insertBefore(sep,last.nextSibling);sep.parentNode.insertBefore(gi,sep.nextSibling);}
+    });
+  }).observe(document.body,{childList:true,subtree:true});
+  console.log('[Xboard] 一键权限组扩展已加载');
+})();
+EXTJS
+
+        # 注入到 index.html
+        if [[ -f "${ADMIN_DIR}/index.html" ]] && ! grep -q "xb-extensions" "${ADMIN_DIR}/index.html"; then
+            sed -i 's|<script type="module" crossorigin|<script src="./assets/xb-extensions.js" defer></script>\n    <script type="module" crossorigin|' "${ADMIN_DIR}/index.html"
+        fi
+
+        # 注入中文翻译
+        if [[ -f "${ADMIN_DIR}/locales/zh-CN.js" ]] && ! grep -q "batch_set_group" "${ADMIN_DIR}/locales/zh-CN.js"; then
+            sed -i 's/"batch_reset_traffic_error": "批量重置流量失败"/"batch_reset_traffic_error": "批量重置流量失败",\n      "batch_set_group": {"menu": "一键权限组","title": "批量设置权限组","confirm": "确认设置"}/' "${ADMIN_DIR}/locales/zh-CN.js"
+        fi
+
+        log_success "前端扩展注入完成"
+    fi
+
     # 检查是否已安装过
     if [[ -f ".env" ]] && grep -q "INSTALLED=true" .env 2>/dev/null; then
         log_info "Xboard 已安装过，跳过初始化"
