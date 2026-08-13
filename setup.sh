@@ -473,10 +473,14 @@ configure_php() {
     log_step "Step 4/9: 配置 PHP 8.2 扩展和函数"
 
     local PHP_INI="/www/server/php/${PHP_VERSION}/etc/php.ini"
+    local PHP_CLI_INI="/www/server/php/${PHP_VERSION}/etc/php-cli.ini"
     local PHP_EXT_SCRIPT="/www/server/panel/install/install_soft.sh"
+    local PHP_EXT_DIR="/www/server/php/${PHP_VERSION}/lib/php/extensions"
 
     # 安装必要扩展
-    local extensions=("redis" "fileinfo" "swoole4" "event")
+    local extensions=("fileinfo" "redis" "swoole4" "event")
+    local failed_exts=()
+
     for ext in "${extensions[@]}"; do
         local ext_check="${ext}"
         [[ "$ext" == "swoole4" ]] && ext_check="swoole"
@@ -485,16 +489,59 @@ configure_php() {
             log_info "PHP 扩展 ${ext_check} 已安装 ✓"
         else
             log_info "安装 PHP 扩展: ${ext} ..."
-            # 宝塔安装 PHP 扩展
+
+            # 方法1: 宝塔 install_soft.sh
             if [[ -f "$PHP_EXT_SCRIPT" ]]; then
-                bash "$PHP_EXT_SCRIPT" 1 install "${ext}" "${PHP_VERSION}" > /dev/null 2>&1 || true
+                bash "$PHP_EXT_SCRIPT" 1 install "${ext}" "${PHP_VERSION}" > /tmp/bt_ext_${ext}.log 2>&1 || true
             fi
-            # 备用: pecl
+
+            # 方法2: pecl
             if ! ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
-                /www/server/php/${PHP_VERSION}/bin/pecl install "${ext_check}" > /dev/null 2>&1 || true
+                log_info "尝试通过 pecl 安装 ${ext_check} ..."
+                /www/server/php/${PHP_VERSION}/bin/pecl install "${ext_check}" > /tmp/bt_ext_${ext}.log 2>&1 || true
+                # 确保 extension 在 ini 中启用
+                if [[ -f "$PHP_INI" ]] && ! grep -q "extension=${ext_check}" "$PHP_INI" 2>/dev/null; then
+                    echo "extension=${ext_check}.so" >> "$PHP_INI"
+                fi
+                if [[ -f "$PHP_CLI_INI" ]] && ! grep -q "extension=${ext_check}" "$PHP_CLI_INI" 2>/dev/null; then
+                    echo "extension=${ext_check}.so" >> "$PHP_CLI_INI"
+                fi
+            fi
+
+            # 验证是否安装成功
+            if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+                log_success "PHP 扩展 ${ext_check} 安装成功 ✓"
+            else
+                log_error "PHP 扩展 ${ext_check} 安装失败！"
+                log_error "安装日志: cat /tmp/bt_ext_${ext}.log"
+                failed_exts+=("${ext_check}")
             fi
         fi
     done
+
+    # 如果有关键扩展安装失败，提示手动安装
+    if [[ ${#failed_exts[@]} -gt 0 ]]; then
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_error "以下 PHP 扩展安装失败，请在 aaPanel 面板中手动安装:"
+        log_error "  路径: aaPanel → App Store → PHP 8.2 → Extensions"
+        for fe in "${failed_exts[@]}"; do
+            log_error "  - ${fe}"
+        done
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        read -rp "$(echo -e "${YELLOW}手动安装完成后按 Enter 继续 ...${NC}")"
+
+        # 重启 PHP 后重新验证
+        /etc/init.d/php-fpm-${PHP_VERSION} restart > /dev/null 2>&1 || true
+        sleep 1
+
+        for fe in "${failed_exts[@]}"; do
+            if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${fe}$"; then
+                log_success "PHP 扩展 ${fe} 已检测到 ✓"
+            else
+                log_warn "PHP 扩展 ${fe} 仍未检测到，后续安装可能失败"
+            fi
+        done
+    fi
 
     # 解禁 PHP 函数
     if [[ -f "$PHP_INI" ]]; then
@@ -508,6 +555,19 @@ configure_php() {
         # 清理 disable_functions 中多余的逗号
         sed -i 's/,,*/,/g; s/disable_functions\s*=\s*,/disable_functions = /' "$PHP_INI"
         sed -i 's/,\s*$//' "$PHP_INI"
+    fi
+
+    # 同步 php-cli.ini 的函数解禁
+    if [[ -f "$PHP_CLI_INI" ]]; then
+        log_info "解禁 CLI 模式的 PHP 函数 ..."
+        local functions_to_enable=("putenv" "proc_open" "pcntl_alarm" "pcntl_signal" "pcntl_signal_dispatch" "pcntl_async_signals" "pcntl_wait" "pcntl_wifexited" "pcntl_wifstopped" "pcntl_wifsignaled" "pcntl_wexitstatus" "pcntl_wtermsig" "pcntl_wstopsig" "pcntl_exec")
+
+        for func in "${functions_to_enable[@]}"; do
+            sed -i "s/,${func}//g; s/${func},//g; s/${func}//g" "$PHP_CLI_INI"
+        done
+
+        sed -i 's/,,*/,/g; s/disable_functions\s*=\s*,/disable_functions = /' "$PHP_CLI_INI"
+        sed -i 's/,\s*$//' "$PHP_CLI_INI"
     fi
 
     # 重启 PHP-FPM
@@ -612,12 +672,36 @@ deploy_xboard() {
 
     # 安装 Composer 依赖
     log_info "安装 Composer 依赖 (约需 1-3 分钟) ..."
+    export COMPOSER_ALLOW_SUPERUSER=1
     rm -f composer.phar
     wget -q https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
+
+    # 尝试 composer install
     ${PHP_BIN} composer.phar install --no-dev --optimize-autoloader --no-interaction 2>&1 || {
-        log_warn "优化模式失败，尝试标准安装 ..."
-        ${PHP_BIN} composer.phar install --no-interaction 2>&1
+        log_warn "composer install 失败，尝试 composer update ..."
+        ${PHP_BIN} composer.phar update --no-dev --optimize-autoloader --no-interaction 2>&1 || {
+            log_warn "优化模式失败，尝试标准安装 ..."
+            ${PHP_BIN} composer.phar install --no-interaction 2>&1 || \
+            ${PHP_BIN} composer.phar update --no-interaction 2>&1 || true
+        }
     }
+
+    # 验证 vendor 目录是否生成
+    if [[ ! -f "${SITE_DIR}/vendor/autoload.php" ]]; then
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        log_error "Composer 依赖安装失败！vendor/autoload.php 不存在"
+        log_error "请检查 PHP 扩展是否完整 (尤其是 fileinfo)"
+        log_error "手动修复方法:"
+        log_error "  cd ${SITE_DIR}"
+        log_error "  ${PHP_BIN} composer.phar update --no-dev --no-interaction"
+        log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        read -rp "$(echo -e "${YELLOW}修复完成后按 Enter 继续 (或 Ctrl+C 退出) ...${NC}")"
+        if [[ ! -f "${SITE_DIR}/vendor/autoload.php" ]]; then
+            log_error "vendor/autoload.php 仍不存在，脚本无法继续"
+            exit 1
+        fi
+    fi
+    log_success "Composer 依赖安装完成"
 
     # 初始化 Git 子模块 (前端主题)
     log_info "初始化前端主题 ..."
