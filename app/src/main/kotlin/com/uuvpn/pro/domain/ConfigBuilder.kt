@@ -37,7 +37,6 @@ object ConfigBuilder {
                 outbound,
                 mapOf("type" to "direct", "tag" to "direct"),
                 mapOf("type" to "block", "tag" to "block"),
-                mapOf("type" to "dns", "tag" to "dns-out"),
             ),
             "route" to buildRoute(routeMode),
             "experimental" to mapOf(
@@ -56,27 +55,30 @@ object ConfigBuilder {
     private fun buildDns(routeMode: String): Map<String, Any> {
         // sing-box 1.14+ 新格式: 必须有 type 字段
         val servers = mutableListOf<Map<String, Any>>(
-            // 本地直连 DNS（用于解析 DoH 服务器地址）
+            // 本地直连 UDP DNS（用于解析 DoH 服务器域名）
             mapOf(
                 "tag" to "dns-resolver",
                 "type" to "udp",
-                "address" to "223.5.5.5",
+                "server" to "223.5.5.5",
+                "server_port" to 53,
                 "detour" to "direct",
             ),
             // 远程 DoH DNS（走代理）
             mapOf(
                 "tag" to "remote-dns",
                 "type" to "https",
-                "address" to "https://8.8.8.8/dns-query",
-                "address_resolver" to "dns-resolver",
+                "server" to "8.8.8.8",
+                "server_port" to 443,
+                "domain_resolver" to "dns-resolver",
                 "detour" to "proxy",
             ),
             // 本地 DoH DNS（直连）
             mapOf(
                 "tag" to "local-dns",
                 "type" to "https",
-                "address" to "https://223.5.5.5/dns-query",
-                "address_resolver" to "dns-resolver",
+                "server" to "223.5.5.5",
+                "server_port" to 443,
+                "domain_resolver" to "dns-resolver",
                 "detour" to "direct",
             ),
             // 阻断 DNS
@@ -113,13 +115,10 @@ object ConfigBuilder {
             mapOf(
                 "type" to "tun",
                 "tag" to "tun-in",
-                "inet4_address" to "172.19.0.1/30",
-                "inet6_address" to "fdfe:dcba:9876::1/126",
+                "address" to listOf("172.19.0.1/30", "fdfe:dcba:9876::1/126"),
                 "auto_route" to true,
                 "strict_route" to true,
                 "stack" to "system",
-                "sniff" to true,
-                "sniff_override_destination" to true,
             ),
             mapOf(
                 "type" to "mixed",
@@ -136,7 +135,7 @@ object ConfigBuilder {
 
     private fun buildRoute(routeMode: String): Map<String, Any> {
         val rules = mutableListOf<Map<String, Any>>(
-            mapOf("protocol" to "dns", "outbound" to "dns-out"),
+            mapOf("protocol" to "dns", "action" to "hijack-dns"),
             mapOf("clash_mode" to "Direct", "outbound" to "direct"),
             mapOf("clash_mode" to "Global", "outbound" to "proxy"),
         )
@@ -206,7 +205,15 @@ object ConfigBuilder {
         )
 
         val flow = ps["flow"]?.toString() ?: ""
-        if (flow.isNotEmpty()) out["flow"] = flow
+        if (flow.isNotEmpty()) {
+            // sing-box 只支持 xtls-rprx-vision，标准化所有 xtls 变体
+            val normalizedFlow = if (flow.contains("xtls", ignoreCase = true) || flow.contains("vision", ignoreCase = true)) {
+                "xtls-rprx-vision"
+            } else {
+                flow
+            }
+            out["flow"] = normalizedFlow
+        }
 
         // Network/Transport
         val network = ps["network"]?.toString() ?: "tcp"
