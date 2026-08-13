@@ -38,6 +38,7 @@ class NodePresetService
      *
      * @param ServerMachine $machine 目标机器
      * @param string $machineName 机器名称（用于节点命名）
+     * @param string|null $serverIp 服务器 IP 地址（用于节点 host）
      * @param array|null $groupIds 权限分组 IDs
      * @param array|null $presets 自定义预设选择（null 表示全部 18 种）
      * @return int 创建的节点数量
@@ -45,6 +46,7 @@ class NodePresetService
     public static function createPresetNodes(
         ServerMachine $machine,
         string $machineName,
+        ?string $serverIp = null,
         ?array $groupIds = null,
         ?array $presets = null,
     ): int {
@@ -72,8 +74,19 @@ class NodePresetService
 
         $created = 0;
 
-        DB::transaction(function () use ($allPresets, $machine, $machineName, $groupIds, &$created) {
+        DB::transaction(function () use ($allPresets, $machine, $machineName, $serverIp, $groupIds, &$created) {
             $sort = Server::max('sort') ?? 0;
+
+            // 确定节点 host: 优先用传入的 IP，其次从 notes 提取，最后用 machine name
+            $host = $serverIp;
+            if (empty($host) && $machine->notes) {
+                if (preg_match('/IP:\s*([\d.]+)/', $machine->notes, $m)) {
+                    $host = $m[1];
+                }
+            }
+            if (empty($host)) {
+                $host = $machine->name;
+            }
 
             foreach ($allPresets as $key => $preset) {
                 $sort++;
@@ -81,7 +94,7 @@ class NodePresetService
                 $serverData = [
                     'type' => $preset['type'],
                     'name' => $machineName . ' | ' . $preset['label'],
-                    'host' => $machine->name,
+                    'host' => $host,
                     'port' => (string) $preset['port'],
                     'server_port' => $preset['server_port'],
                     'protocol_settings' => $preset['protocol_settings'],

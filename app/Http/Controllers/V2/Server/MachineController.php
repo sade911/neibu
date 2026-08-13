@@ -158,6 +158,7 @@ class MachineController extends Controller
         $nodesCreated = NodePresetService::createPresetNodes(
             $machine,
             $machine->name,
+            $serverIp,
             $request->input('group_ids'),
             $request->input('setup_presets')
         );
