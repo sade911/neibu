@@ -182,9 +182,11 @@ install_base_deps() {
     $PKG_UPDATE > /dev/null 2>&1 || true
 
     if [[ "$PKG_MANAGER" == "apt-get" ]]; then
-        apt-get install -y curl wget git unzip socat cron lsof > /dev/null 2>&1 || true
+        apt-get install -y curl wget git unzip socat cron lsof \
+            gcc make autoconf libssl-dev pkg-config bc > /dev/null 2>&1 || true
     else
-        yum install -y curl wget git unzip socat cronie lsof > /dev/null 2>&1 || true
+        yum install -y curl wget git unzip socat cronie lsof \
+            gcc make autoconf openssl-devel pkg-config bc > /dev/null 2>&1 || true
         systemctl enable crond > /dev/null 2>&1 || true
         systemctl start crond > /dev/null 2>&1 || true
     fi
@@ -583,66 +585,125 @@ configure_php() {
 
         if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
             log_info "PHP 扩展 ${ext_check} 已安装 ✓"
-        else
-            log_info "安装 PHP 扩展: ${ext} ..."
+            continue
+        fi
 
-            # fileinfo 是 PHP 内建扩展，通常只需在 ini 中启用
-            if [[ "$ext_check" == "fileinfo" ]]; then
-                log_info "fileinfo 是 PHP 内建扩展，尝试直接启用 ..."
-                # 查找 fileinfo.so
-                local fileinfo_so
-                fileinfo_so=$(find /www/server/php/${PHP_VERSION}/ -name "fileinfo.so" 2>/dev/null | head -1)
-                if [[ -n "$fileinfo_so" ]]; then
-                    log_info "找到 fileinfo.so: ${fileinfo_so}"
-                    # 在 php.ini 和 php-cli.ini 中启用
-                    for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
-                        if [[ -f "$ini_file" ]] && ! grep -q "^extension=fileinfo" "$ini_file" 2>/dev/null; then
-                            echo "extension=fileinfo" >> "$ini_file"
-                        fi
-                    done
-                else
-                    # .so 不存在，尝试宝塔安装
-                    if [[ -f "$PHP_EXT_SCRIPT" ]]; then
-                        bash "$PHP_EXT_SCRIPT" 1 install fileinfo "${PHP_VERSION}" > /tmp/bt_ext_fileinfo.log 2>&1 || true
-                    fi
-                    # 再次查找
-                    fileinfo_so=$(find /www/server/php/${PHP_VERSION}/ -name "fileinfo.so" 2>/dev/null | head -1)
-                    if [[ -n "$fileinfo_so" ]]; then
-                        for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
-                            if [[ -f "$ini_file" ]] && ! grep -q "^extension=fileinfo" "$ini_file" 2>/dev/null; then
-                                echo "extension=fileinfo" >> "$ini_file"
-                            fi
-                        done
-                    fi
-                fi
-                # 重启 PHP 使配置生效
+        log_info "安装 PHP 扩展: ${ext} ..."
+
+        local PHP_DIR="/www/server/php/${PHP_VERSION}"
+        local PHPIZE="${PHP_DIR}/bin/phpize"
+        local PHP_CONFIG="${PHP_DIR}/bin/php-config"
+        local EXT_SO_DIR
+        EXT_SO_DIR=$(${PHP_BIN} -i 2>/dev/null | grep '^extension_dir' | awk -F'=>' '{print $NF}' | tr -d ' ' || echo "${PHP_DIR}/lib/php/extensions/no-debug-non-zts-20220829")
+
+        # ====== 方法1: 宝塔面板 API (HTTP 接口) ======
+        if [[ -f "/www/server/panel/data/default.pl" ]]; then
+            local BT_PORT
+            BT_PORT=$(cat /www/server/panel/data/port.pl 2>/dev/null || echo "8888")
+            local BT_KEY
+            BT_KEY=$(cat /www/server/panel/data/default.pl 2>/dev/null || echo "")
+            if [[ -n "$BT_KEY" ]]; then
+                log_info "通过宝塔面板 API 安装 ${ext} ..."
+                local BT_API="http://127.0.0.1:${BT_PORT}/plugin?action=install_plugin"
+                curl -s --connect-timeout 5 --max-time 60 -X POST "$BT_API" \
+                    -d "sName=${ext}&version=${PHP_VERSION}&type=1" \
+                    -H "Cookie: request_token=${BT_KEY}" > /tmp/bt_ext_${ext}.log 2>&1 || true
+                # 重启 PHP 使生效
                 /etc/init.d/php-fpm-${PHP_VERSION} restart > /dev/null 2>&1 || true
                 sleep 1
-            else
-                # 非 fileinfo 扩展: 宝塔 + pecl 流程
-                if [[ -f "$PHP_EXT_SCRIPT" ]]; then
-                    bash "$PHP_EXT_SCRIPT" 1 install "${ext}" "${PHP_VERSION}" > /tmp/bt_ext_${ext}.log 2>&1 || true
-                fi
+            fi
+        fi
 
-                if ! ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
-                    log_info "尝试通过 pecl 安装 ${ext_check} ..."
-                    /www/server/php/${PHP_VERSION}/bin/pecl install "${ext_check}" > /tmp/bt_ext_${ext}.log 2>&1 || true
+        # 检查方法1是否成功
+        if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+            log_success "PHP 扩展 ${ext_check} 安装成功 ✓"
+            continue
+        fi
+
+        # ====== 方法2: 查找已存在的 .so 文件并启用 ======
+        local so_file
+        so_file=$(find "${PHP_DIR}/" -name "${ext_check}.so" 2>/dev/null | head -1)
+        if [[ -n "$so_file" ]]; then
+            log_info "找到 ${ext_check}.so: ${so_file}，在 ini 中启用"
+            for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
+                if [[ -f "$ini_file" ]] && ! grep -q "^extension=${ext_check}" "$ini_file" 2>/dev/null; then
+                    echo "extension=${ext_check}" >> "$ini_file"
+                fi
+            done
+            /etc/init.d/php-fpm-${PHP_VERSION} restart > /dev/null 2>&1 || true
+            sleep 1
+            if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+                log_success "PHP 扩展 ${ext_check} 启用成功 ✓"
+                continue
+            fi
+        fi
+
+        # ====== 方法3: pecl + phpize 编译安装 ======
+        if [[ -x "$PHPIZE" ]] && [[ -x "$PHP_CONFIG" ]]; then
+            log_info "通过 phpize + pecl 编译安装 ${ext_check} ..."
+
+            local pecl_name="${ext_check}"
+            # swoole4 在 pecl 上的名称是 swoole
+            [[ "$ext" == "swoole4" ]] && pecl_name="swoole"
+
+            cd /tmp
+            rm -rf "pecl_${ext_check}" 2>/dev/null || true
+            mkdir -p "pecl_${ext_check}"
+            cd "pecl_${ext_check}"
+
+            # 下载源码
+            ${PHP_DIR}/bin/pecl download "${pecl_name}" > /tmp/bt_ext_${ext}.log 2>&1 || true
+            local tarball
+            tarball=$(ls ${pecl_name}-*.tgz 2>/dev/null | head -1)
+
+            if [[ -n "$tarball" ]]; then
+                tar xzf "$tarball" 2>/dev/null || true
+                local src_dir
+                src_dir=$(ls -d ${pecl_name}-*/ 2>/dev/null | head -1)
+
+                if [[ -n "$src_dir" ]] && [[ -d "$src_dir" ]]; then
+                    cd "$src_dir"
+                    $PHPIZE > /tmp/bt_ext_${ext}.log 2>&1
+
+                    # swoole 需要特殊配置
+                    if [[ "$ext_check" == "swoole" ]]; then
+                        ./configure --with-php-config="$PHP_CONFIG" \
+                            --enable-openssl --enable-http2 --enable-swoole \
+                            >> /tmp/bt_ext_${ext}.log 2>&1 || \
+                        ./configure --with-php-config="$PHP_CONFIG" \
+                            >> /tmp/bt_ext_${ext}.log 2>&1 || true
+                    else
+                        ./configure --with-php-config="$PHP_CONFIG" \
+                            >> /tmp/bt_ext_${ext}.log 2>&1 || true
+                    fi
+
+                    make -j$(nproc) >> /tmp/bt_ext_${ext}.log 2>&1 || true
+                    make install >> /tmp/bt_ext_${ext}.log 2>&1 || true
+
+                    # 确保在 ini 中启用
                     for ini_file in "$PHP_INI" "$PHP_CLI_INI"; do
-                        if [[ -f "$ini_file" ]] && ! grep -q "extension=${ext_check}" "$ini_file" 2>/dev/null; then
+                        if [[ -f "$ini_file" ]] && ! grep -q "^extension=${ext_check}" "$ini_file" 2>/dev/null; then
                             echo "extension=${ext_check}.so" >> "$ini_file"
                         fi
                     done
                 fi
             fi
 
-            # 验证是否安装成功
-            if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
-                log_success "PHP 扩展 ${ext_check} 安装成功 ✓"
-            else
-                log_error "PHP 扩展 ${ext_check} 安装失败！"
-                log_error "安装日志: cat /tmp/bt_ext_${ext}.log"
-                failed_exts+=("${ext_check}")
-            fi
+            cd /tmp
+            rm -rf "pecl_${ext_check}" 2>/dev/null || true
+
+            # 重启 PHP
+            /etc/init.d/php-fpm-${PHP_VERSION} restart > /dev/null 2>&1 || true
+            sleep 1
+        fi
+
+        # ====== 最终验证 ======
+        if ${PHP_BIN} -m 2>/dev/null | grep -qi "^${ext_check}$"; then
+            log_success "PHP 扩展 ${ext_check} 安装成功 ✓"
+        else
+            log_error "PHP 扩展 ${ext_check} 安装失败！"
+            log_error "安装日志: cat /tmp/bt_ext_${ext}.log"
+            failed_exts+=("${ext_check}")
         fi
     done
 
