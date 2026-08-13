@@ -13,10 +13,16 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      CMAKE_GENERATOR: "Visual Studio 17 2022"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check Visual Studio
+        run: |
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -26,6 +32,9 @@ jobs:
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
+
+      - name: Clean build cache
+        run: flutter clean
 
       - name: Get dependencies
         run: flutter pub get
