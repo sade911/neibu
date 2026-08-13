@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Xboard Node 多后端一键部署脚本 v2
+# Xboard Node 多后端一键部署脚�?v2
 # 架构: xray-core + hysteria2 + tuic-server + ssserver + caddy-naive
 # 端口: 全部随机分配
 #
@@ -64,10 +64,10 @@ get_arch() {
 
 # ============================================================
 echo ""
-echo -e "${CYAN}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║  Xboard 多后端节点部署 v2                              ║${NC}"
-echo -e "${CYAN}║  xray + hysteria2 + tuic + ss-rust + naiveproxy       ║${NC}"
-echo -e "${CYAN}╚═══════════════════════════════════════════════════════╝${NC}"
+echo -e "${CYAN}╔═══════════════════════════════════════════════════════�?{NC}"
+echo -e "${CYAN}�? Xboard 多后端节点部�?v2                              �?{NC}"
+echo -e "${CYAN}�? xray + hysteria2 + tuic + ss-rust + naiveproxy       �?{NC}"
+echo -e "${CYAN}╚═══════════════════════════════════════════════════════�?{NC}"
 echo ""
 
 mkdir -p "$CONFIG_DIR" "$CERT_DIR"
@@ -78,7 +78,7 @@ ARCH=$(get_arch)
 # ============================================================
 echo -e "${BLUE}[1/12] 安装依赖 ...${NC}"
 if command -v apt-get &>/dev/null; then
-    # 修复失效的 Debian 源（如 bullseye-backports 已归档）
+    # 修复失效�?Debian 源（�?bullseye-backports 已归档）
     sed -i '/backports/d' /etc/apt/sources.list 2>/dev/null || true
     for f in /etc/apt/sources.list.d/*.list; do
         [[ -f "$f" ]] && sed -i '/backports/d' "$f" 2>/dev/null || true
@@ -89,8 +89,7 @@ elif command -v yum &>/dev/null; then
     yum install -y -q curl openssl unzip wget 2>/dev/null || true
 fi
 
-# jq 单独安装（很多最小镜像里没有）
-if ! command -v jq &>/dev/null; then
+# jq 单独安装（很多最小镜像里没有�?if ! command -v jq &>/dev/null; then
     if command -v apt-get &>/dev/null; then
         apt-get install -y -qq jq 2>/dev/null || true
     elif command -v yum &>/dev/null; then
@@ -102,31 +101,47 @@ if ! command -v jq &>/dev/null; then
     curl -fsSL -o /usr/local/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 2>/dev/null
     chmod +x /usr/local/bin/jq 2>/dev/null || true
 fi
-echo -e "  ${GREEN}✓ 依赖就绪${NC}"
+echo -e "  ${GREEN}�?依赖就绪${NC}"
 
 # ============================================================
-# Step 2: 安装 xray-core
+# Step 2: 安装 xboard-node (用户同步/流量上报/设备限制)
 # ============================================================
-echo -e "${BLUE}[2/12] 安装 xray-core ...${NC}"
+echo -e "${BLUE}[2/13] 安装 xboard-node ...${NC}"
+XBOARD_NODE_INSTALLER="https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh"
+if ! systemctl is-active --quiet xboard-node 2>/dev/null; then
+    curl -fsSL "$XBOARD_NODE_INSTALLER" | bash -s -- \
+        --mode machine \
+        --panel "$PANEL_URL" \
+        --token "$TOKEN" \
+        --machine-id "$MACHINE_ID" 2>&1 | tail -5
+    echo -e "  ${GREEN}�?xboard-node 安装完成${NC}"
+else
+    echo -e "  ${YELLOW}�?xboard-node 已运�?{NC}"
+fi
+
+# ============================================================
+# Step 3: 安装 xray-core
+# ============================================================
+echo -e "${BLUE}[3/13] 安装 xray-core ...${NC}"
 if ! command -v xray &>/dev/null; then
     bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>&1 | tail -3
 fi
-echo -e "  ${GREEN}✓ xray-core: $(xray version 2>/dev/null | head -1 || echo 'installed')${NC}"
+echo -e "  ${GREEN}�?xray-core: $(xray version 2>/dev/null | head -1 || echo 'installed')${NC}"
 
 # ============================================================
 # Step 3: 安装 Hysteria 2
 # ============================================================
-echo -e "${BLUE}[3/12] 安装 Hysteria 2 ...${NC}"
+echo -e "${BLUE}[4/13] 安装 Hysteria 2 ...${NC}"
 HY2_BIN="/usr/local/bin/hysteria"
 if [[ ! -f "$HY2_BIN" ]]; then
     bash <(curl -fsSL https://get.hy2.sh/) 2>&1 | tail -3
 fi
-echo -e "  ${GREEN}✓ hysteria2: $($HY2_BIN version 2>/dev/null | head -1 || echo 'installed')${NC}"
+echo -e "  ${GREEN}�?hysteria2: $($HY2_BIN version 2>/dev/null | head -1 || echo 'installed')${NC}"
 
 # ============================================================
 # Step 4: 安装 TUIC server
 # ============================================================
-echo -e "${BLUE}[4/12] 安装 TUIC v5 ...${NC}"
+echo -e "${BLUE}[5/13] 安装 TUIC v5 ...${NC}"
 TUIC_BIN="/usr/local/bin/tuic-server"
 if [[ ! -f "$TUIC_BIN" ]]; then
     TUIC_VER="tuic-server-1.0.0"
@@ -135,18 +150,18 @@ if [[ ! -f "$TUIC_BIN" ]]; then
     fi
     TUIC_URL="https://github.com/EAimTY/tuic/releases/download/${TUIC_VER}/tuic-server-1.0.0-x86_64-unknown-linux-musl"
     [[ "$ARCH" == "arm64" ]] && TUIC_URL="https://github.com/EAimTY/tuic/releases/download/${TUIC_VER}/tuic-server-1.0.0-aarch64-unknown-linux-musl"
-    curl -fsSL -o "$TUIC_BIN" "$TUIC_URL" 2>/dev/null && chmod +x "$TUIC_BIN" || echo -e "  ${YELLOW}⚠ TUIC 下载失败${NC}"
+    curl -fsSL -o "$TUIC_BIN" "$TUIC_URL" 2>/dev/null && chmod +x "$TUIC_BIN" || echo -e "  ${YELLOW}�?TUIC 下载失败${NC}"
 fi
 if [[ -f "$TUIC_BIN" ]]; then
-    echo -e "  ${GREEN}✓ tuic-server 就绪${NC}"
+    echo -e "  ${GREEN}�?tuic-server 就绪${NC}"
 else
-    echo -e "  ${YELLOW}⚠ tuic-server 跳过${NC}"
+    echo -e "  ${YELLOW}�?tuic-server 跳过${NC}"
 fi
 
 # ============================================================
 # Step 5: 安装 Shadowsocks-Rust
 # ============================================================
-echo -e "${BLUE}[5/12] 安装 Shadowsocks-Rust ...${NC}"
+echo -e "${BLUE}[6/13] 安装 Shadowsocks-Rust ...${NC}"
 SS_BIN="/usr/local/bin/ssserver"
 if [[ ! -f "$SS_BIN" ]]; then
     SS_VER="v1.21.2"
@@ -163,24 +178,24 @@ if [[ ! -f "$SS_BIN" ]]; then
     fi
 fi
 if [[ -f "$SS_BIN" ]]; then
-    echo -e "  ${GREEN}✓ ssserver: $($SS_BIN --version 2>/dev/null || echo 'installed')${NC}"
+    echo -e "  ${GREEN}�?ssserver: $($SS_BIN --version 2>/dev/null || echo 'installed')${NC}"
 else
-    echo -e "  ${YELLOW}⚠ ssserver 跳过${NC}"
+    echo -e "  ${YELLOW}�?ssserver 跳过${NC}"
 fi
 
 # ============================================================
 # Step 6: 安装 NaïveProxy (caddy-naive)
 # ============================================================
-echo -e "${BLUE}[6/12] 安装 NaïveProxy (caddy-naive) ...${NC}"
+echo -e "${BLUE}[7/13] 安装 NaïveProxy (caddy-naive) ...${NC}"
 NAIVE_BIN="/usr/local/bin/caddy-naive"
 if [[ ! -f "$NAIVE_BIN" ]]; then
-    # 方法1: Caddy 官方构建 API (自动编译含 naive 模块的 caddy)
+    # 方法1: Caddy 官方构建 API (自动编译�?naive 模块�?caddy)
     CADDY_ARCH="amd64"
     [[ "$ARCH" == "arm64" ]] && CADDY_ARCH="arm64"
     curl -fsSL -o "$NAIVE_BIN" \
         "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}&p=github.com%2Fcaddyserver%2Fforwardproxy%40caddy2%3Dgithub.com%2Fklzgrad%2Fforwardproxy%40naive" \
         2>/dev/null && chmod +x "$NAIVE_BIN" || {
-        # 方法2: 直接下载 naiveproxy 官方 release (服务端就是 naive 本身)
+        # 方法2: 直接下载 naiveproxy 官方 release (服务端就�?naive 本身)
         echo -e "  ${YELLOW}Caddy API 不可用，尝试 naiveproxy 官方 release...${NC}"
         NP_VER=$(curl -s https://api.github.com/repos/klzgrad/naiveproxy/releases/latest 2>/dev/null | jq -r '.tag_name // "v136.0.7103.48-1"') || NP_VER="v136.0.7103.48-1"
         NP_ASSET="naiveproxy-${NP_VER}-linux-x64.tar.xz"
@@ -196,15 +211,15 @@ if [[ ! -f "$NAIVE_BIN" ]]; then
     }
 fi
 if [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]]; then
-    echo -e "  ${GREEN}✓ caddy-naive 就绪${NC}"
+    echo -e "  ${GREEN}�?caddy-naive 就绪${NC}"
 else
-    echo -e "  ${YELLOW}⚠ NaïveProxy 安装跳过${NC}"
+    echo -e "  ${YELLOW}�?NaïveProxy 安装跳过${NC}"
 fi
 
 # ============================================================
 # Step 7: TLS 证书 + Reality 密钥
 # ============================================================
-echo -e "${BLUE}[7/12] 生成证书与密钥 ...${NC}"
+echo -e "${BLUE}[8/13] 生成证书与密�?...${NC}"
 CERT_FILE="${CERT_DIR}/fullchain.pem"
 KEY_FILE="${CERT_DIR}/key.pem"
 
@@ -212,19 +227,19 @@ if [[ ! -f "$CERT_FILE" ]] || [[ ! -f "$KEY_FILE" ]]; then
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
         -days 3650 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" \
         -subj "/CN=www.bing.com" 2>/dev/null
-    echo -e "  ${GREEN}✓ TLS 自签证书${NC}"
+    echo -e "  ${GREEN}�?TLS 自签证书${NC}"
 fi
 
 REALITY_OUTPUT=$(xray x25519 2>/dev/null)
 REALITY_PRIVATE_KEY=$(echo "$REALITY_OUTPUT" | grep 'Private key:' | awk '{print $3}')
 REALITY_PUBLIC_KEY=$(echo "$REALITY_OUTPUT" | grep 'Public key:' | awk '{print $3}')
 REALITY_SHORT_ID=$(openssl rand -hex 4)
-echo -e "  ${GREEN}✓ Reality 密钥: ${REALITY_PUBLIC_KEY:0:16}...${NC}"
+echo -e "  ${GREEN}�?Reality 密钥: ${REALITY_PUBLIC_KEY:0:16}...${NC}"
 
 # ============================================================
 # Step 8: 随机端口
 # ============================================================
-echo -e "${BLUE}[8/12] 分配随机端口 ...${NC}"
+echo -e "${BLUE}[9/13] 分配随机端口 ...${NC}"
 SERVER_IP=$(get_server_ip)
 echo -e "  IP: ${GREEN}${SERVER_IP}${NC}"
 
@@ -256,7 +271,7 @@ echo -e "  ${CYAN}naive:${NC}     NaïveProxy:${P_NAIVE}"
 # ============================================================
 # Step 9: 生成配置文件
 # ============================================================
-echo -e "${BLUE}[9/12] 生成配置文件 ...${NC}"
+echo -e "${BLUE}[10/13] 生成配置文件 ...${NC}"
 
 # ---- xray-core ----
 cat > "${CONFIG_DIR}/xray.json" << XEOF
@@ -571,15 +586,15 @@ cat > "${CONFIG_DIR}/naive.json" << NAIVEEOF
   }
 }
 NAIVEEOF
-echo -e "  ${GREEN}✓ NaïveProxy 配置${NC}"
+echo -e "  ${GREEN}�?NaïveProxy 配置${NC}"
 fi
 
-echo -e "  ${GREEN}✓ 全部配置文件已生成${NC}"
+echo -e "  ${GREEN}�?全部配置文件已生�?{NC}"
 
 # ============================================================
 # Step 10: 保存环境变量 + API 注册
 # ============================================================
-echo -e "${BLUE}[10/12] 注册节点到面板 ...${NC}"
+echo -e "${BLUE}[11/13] 注册节点到面�?...${NC}"
 
 cat > "${CONFIG_DIR}/.env" << ENVEOF
 PANEL_URL=${PANEL_URL}
@@ -636,15 +651,15 @@ SETUP_RESPONSE=$(curl -s -X POST "${PANEL_URL}/api/v2/server/machine/autoSetup" 
 
 if [[ -n "$SETUP_RESPONSE" ]]; then
     NC_VAL=$(echo "$SETUP_RESPONSE" | jq -r '.data.nodes_created // 0')
-    echo -e "  ${GREEN}✓ 创建 ${NC_VAL} 个节点${NC}"
+    echo -e "  ${GREEN}�?创建 ${NC_VAL} 个节�?{NC}"
 else
-    echo -e "  ${RED}✗ API 注册失败${NC}"
+    echo -e "  ${RED}�?API 注册失败${NC}"
 fi
 
 # ============================================================
 # Step 11: 创建用户同步脚本
 # ============================================================
-echo -e "${BLUE}[11/12] 创建用户同步脚本 ...${NC}"
+echo -e "${BLUE}[12/13] 创建用户同步脚本 ...${NC}"
 
 cat > "${CONFIG_DIR}/sync_users.sh" << 'SYNCEOF'
 #!/bin/bash
@@ -667,7 +682,7 @@ USERS_RESP=$(curl -s "${PANEL_URL}/api/v2/server/user?token=${TOKEN}&node_id=${N
 UUIDS=($(echo "$USERS_RESP" | jq -r '.users[]?.uuid // empty' 2>/dev/null | sort -u))
 [[ ${#UUIDS[@]} -eq 0 ]] && exit 0
 
-echo "[$(date)] 同步 ${#UUIDS[@]} 个用户"
+echo "[$(date)] 同步 ${#UUIDS[@]} 个用�?
 
 # ---- 更新 xray-core ----
 XRAY_VLESS='['; XRAY_VLESS_NF='['; XRAY_TROJAN='['; XRAY_VMESS='['
@@ -702,7 +717,7 @@ for CFG in hy2.yaml hy2-obfs.yaml hy2-warp.yaml hy2-obfs-warp.yaml; do
     for U in "${UUIDS[@]}"; do
         USERPASS+="    ${U}: ${U}"$'\n'
     done
-    # 用 sed 替换空的 userpass
+    # �?sed 替换空的 userpass
     python3 -c "
 import yaml, sys
 with open('$F') as f: c = yaml.safe_load(f)
@@ -741,21 +756,20 @@ chmod +x "${CONFIG_DIR}/sync_users.sh"
 # Cron
 CRON_LINE="* * * * * ${CONFIG_DIR}/sync_users.sh >> /var/log/xboard-sync.log 2>&1"
 (crontab -l 2>/dev/null | grep -v 'sync_users.sh'; echo "$CRON_LINE") | crontab -
-echo -e "  ${GREEN}✓ 同步脚本 + Cron 就绪${NC}"
+echo -e "  ${GREEN}�?同步脚本 + Cron 就绪${NC}"
 
 # ============================================================
-# Step 12: systemd 服务 + 防火墙 + 启动
+# Step 12: systemd 服务 + 防火�?+ 启动
 # ============================================================
-echo -e "${BLUE}[12/12] 启动全部服务 ...${NC}"
+echo -e "${BLUE}[13/13] 启动全部服务 ...${NC}"
 
-# 防火墙
-for port in "${ALL_PORTS[@]}"; do
+# 防火�?for port in "${ALL_PORTS[@]}"; do
     iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
     iptables -C INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || \
         iptables -A INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
 done
-echo -e "  ${GREEN}✓ 防火墙 ${#ALL_PORTS[@]} 端口${NC}"
+echo -e "  ${GREEN}�?防火�?${#ALL_PORTS[@]} 端口${NC}"
 
 # --- xray systemd ---
 mkdir -p /etc/systemd/system/xray.service.d
@@ -831,8 +845,7 @@ systemctl daemon-reload
 SERVICES=(xray hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp tuic-direct tuic-warp ssserver)
 [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]] && SERVICES+=(naive)
 
-# 先同步用户
-"${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
+# 先同步用�?"${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
 
 for SVC in "${SERVICES[@]}"; do
     systemctl enable "$SVC" 2>/dev/null || true
@@ -842,19 +855,19 @@ done
 sleep 2
 
 echo ""
-echo -e "${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                    部署完成！                          ║${NC}"
-echo -e "${GREEN}╠═══════════════════════════════════════════════════════╣${NC}"
+echo -e "${GREEN}╔═══════════════════════════════════════════════════════�?{NC}"
+echo -e "${GREEN}�?                   部署完成�?                         �?{NC}"
+echo -e "${GREEN}╠═══════════════════════════════════════════════════════�?{NC}"
 for SVC in "${SERVICES[@]}"; do
     if systemctl is-active --quiet "$SVC" 2>/dev/null; then
-        echo -e "${GREEN}║  ${SVC}: ✓ 运行中${NC}"
+        echo -e "${GREEN}�? ${SVC}: �?运行�?{NC}"
     else
-        echo -e "${RED}║  ${SVC}: ✗ 异常 (journalctl -u ${SVC})${NC}"
+        echo -e "${RED}�? ${SVC}: �?异常 (journalctl -u ${SVC})${NC}"
     fi
 done
-echo -e "${GREEN}╠═══════════════════════════════════════════════════════╣${NC}"
-echo -e "${GREEN}║  配置: ${CONFIG_DIR}${NC}"
-echo -e "${GREEN}║  同步: 每分钟自动拉取用户${NC}"
-echo -e "${GREEN}║  日志: /var/log/xboard-sync.log${NC}"
-echo -e "${GREEN}╚═══════════════════════════════════════════════════════╝${NC}"
+echo -e "${GREEN}╠═══════════════════════════════════════════════════════�?{NC}"
+echo -e "${GREEN}�? 配置: ${CONFIG_DIR}${NC}"
+echo -e "${GREEN}�? 同步: 每分钟自动拉取用�?{NC}"
+echo -e "${GREEN}�? 日志: /var/log/xboard-sync.log${NC}"
+echo -e "${GREEN}╚═══════════════════════════════════════════════════════�?{NC}"
 echo ""
