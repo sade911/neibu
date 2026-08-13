@@ -943,14 +943,13 @@ deploy_xboard() {
     rm -f composer.phar
     wget -q https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
 
-    # 尝试 composer install
-    ${PHP_BIN} composer.phar install --no-dev --optimize-autoloader --no-interaction 2>&1 || {
-        log_warn "composer install 失败，尝试 composer update ..."
-        ${PHP_BIN} composer.phar update --no-dev --optimize-autoloader --no-interaction 2>&1 || {
-            log_warn "优化模式失败，尝试跳过平台检查安装 ..."
-            ${PHP_BIN} composer.phar install --no-dev --no-interaction --ignore-platform-req=ext-fileinfo 2>&1 || \
-            ${PHP_BIN} composer.phar update --no-dev --no-interaction --ignore-platform-req=ext-fileinfo 2>&1 || true
-        }
+    # 删除旧的 lock 文件 (避免版本锁定冲突)
+    rm -f composer.lock
+
+    # 使用 composer update -W 让 composer 自动解决版本兼容性
+    ${PHP_BIN} composer.phar update --no-dev --optimize-autoloader --no-interaction -W 2>&1 || {
+        log_warn "composer update 失败，尝试跳过平台检查 ..."
+        ${PHP_BIN} composer.phar update --no-dev --no-interaction -W --ignore-platform-reqs 2>&1 || true
     }
 
     # 验证 vendor 目录是否生成
