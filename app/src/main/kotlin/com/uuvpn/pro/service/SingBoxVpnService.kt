@@ -26,6 +26,7 @@ class SingBoxVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        currentStatus = "starting"  // 立即标记为启动中，防止状态检查误判
         createNotificationChannel()
         // 立即启动前台服务，防止 5 秒超时被系统杀死
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

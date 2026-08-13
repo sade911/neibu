@@ -133,7 +133,7 @@ class VpnManager @Inject constructor(
         statusCheckJob?.cancel()
         statusCheckJob = scope.launch {
             var attempts = 0
-            while (isActive && attempts < 10) {
+            while (isActive && attempts < 20) {  // 最多等 10 秒
                 delay(500)
                 val status = SingBoxVpnService.getStatus()
                 Log.d(TAG, "Service status check #$attempts: $status")
@@ -145,16 +145,22 @@ class VpnManager @Inject constructor(
                         startStatsTimer()
                         return@launch
                     }
-                    "error", "stopped" -> {
-                        if (_vpnState.value == VpnState.CONNECTING) {
-                            _vpnState.value = VpnState.DISCONNECTED
-                        }
+                    "error" -> {
+                        _vpnState.value = VpnState.DISCONNECTED
                         return@launch
+                    }
+                    "starting" -> {
+                        // 正在启动中，继续等
+                    }
+                    "stopped" -> {
+                        if (attempts > 6) {
+                            _vpnState.value = VpnState.DISCONNECTED
+                            return@launch
+                        }
                     }
                 }
                 attempts++
             }
-            // 超时
             if (_vpnState.value == VpnState.CONNECTING) {
                 Log.w(TAG, "Connection timed out")
                 _vpnState.value = VpnState.DISCONNECTED
