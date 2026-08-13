@@ -980,6 +980,7 @@ deploy_xboard() {
         if [[ "$swoole_major" -lt 5 ]]; then
             log_info "检测到 Swoole ${swoole_ver} (< 5.x)，修补 Octane 兼容性 ..."
             sed -i 's/public function column(string $name, int $type, int $size = 0): bool/public function column($name, $type, $size = 0)/' "$SWOOLE_TABLE_FILE"
+            sed -i 's/public function set(string $key, array $values): bool/public function set($key, array $values)/' "$SWOOLE_TABLE_FILE"
             log_success "Octane SwooleTable 兼容性补丁已应用"
         fi
     fi
