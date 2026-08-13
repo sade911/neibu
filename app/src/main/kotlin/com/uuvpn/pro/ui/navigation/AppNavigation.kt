@@ -16,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -142,7 +143,7 @@ fun MainScreen(
             NavigationBar(
                 containerColor = SurfaceCard,
                 contentColor = TextPrimary,
-                tonalElevation = androidx.compose.ui.unit.dp.times(0),
+                tonalElevation = 0.dp,
             ) {
                 bottomNavItems.forEach { item ->
                     val selected = currentDestination?.hierarchy?.any { it.route == item.route } == true
