@@ -193,35 +193,131 @@ install_base_deps() {
 }
 
 # ============================================================
-# Step 2: 安装 aaPanel (宝塔国际版)
+# Step 2: 安装宝塔面板 (自动检测国内版/国际版)
 # ============================================================
-install_aapanel() {
-    log_step "Step 2/9: 安装 aaPanel 面板"
 
+# 检测服务器是否在中国大陆
+is_china_server() {
+    local country=""
+
+    # 方法1: cip.cc (国内常用)
+    country=$(curl -s --connect-timeout 3 --max-time 5 cip.cc 2>/dev/null | grep -oP '(?<=国家\s*:\s*)\S+' || echo "")
+    if [[ "$country" == *"中国"* ]]; then
+        return 0
+    fi
+
+    # 方法2: ip.sb + ipinfo.io
+    country=$(curl -s --connect-timeout 3 --max-time 5 "https://ipinfo.io/country" 2>/dev/null || echo "")
+    if [[ "$country" == "CN" ]]; then
+        return 0
+    fi
+
+    # 方法3: 测试访问国内镜像的延迟
+    if curl -s --connect-timeout 2 --max-time 3 "https://download.bt.cn" > /dev/null 2>&1; then
+        local cn_time
+        cn_time=$(curl -o /dev/null -s -w '%{time_total}' --connect-timeout 3 --max-time 5 "https://download.bt.cn" 2>/dev/null || echo "9")
+        local intl_time
+        intl_time=$(curl -o /dev/null -s -w '%{time_total}' --connect-timeout 3 --max-time 5 "https://www.aapanel.com" 2>/dev/null || echo "9")
+        # 如果国内镜像明显更快，判定为国内服务器
+        if (( $(echo "$cn_time < $intl_time" | bc -l 2>/dev/null || echo 0) )); then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+install_panel() {
+    log_step "Step 2/9: 安装宝塔面板"
+
+    # 检测是否已安装 (国内版和国际版共用 /etc/init.d/bt)
     if [[ -f "/etc/init.d/bt" ]]; then
-        log_info "aaPanel 已安装，跳过"
+        # 判断已安装的是国内版还是国际版
+        if [[ -f "/www/server/panel/BTPanel/__init__.py" ]] || bt default 2>/dev/null | grep -qi "宝塔"; then
+            log_info "宝塔面板 (国内版) 已安装 ✓"
+        elif bt default 2>/dev/null | grep -qi "aapanel\|panel"; then
+            log_info "aaPanel (国际版) 已安装 ✓"
+        else
+            log_info "宝塔/aaPanel 已安装 ✓"
+        fi
         # 确保宝塔服务正在运行
         /etc/init.d/bt start > /dev/null 2>&1 || true
         return
     fi
 
-    log_info "正在下载并安装 aaPanel (约需 1-3 分钟) ..."
-
-    local INSTALL_SCRIPT="install_7.0_en.sh"
-    local URL="https://www.aapanel.com/script/${INSTALL_SCRIPT}"
-
-    cd /tmp
-    if command -v curl &> /dev/null; then
-        curl -ksSO "$URL"
+    # 检测服务器位置
+    log_info "正在检测服务器位置 ..."
+    local IS_CHINA=false
+    if is_china_server; then
+        IS_CHINA=true
+        log_info "检测到国内服务器，将安装宝塔面板 (国内版)"
     else
-        wget --no-check-certificate -O "${INSTALL_SCRIPT}" "$URL"
+        log_info "检测到海外服务器，将安装 aaPanel (国际版)"
     fi
 
-    echo "y" | bash "${INSTALL_SCRIPT}" aapanel
-    rm -f "${INSTALL_SCRIPT}"
+    echo ""
+    echo -e "${BLUE}┌─────────── 面板版本选择 ───────────┐${NC}"
+    if [[ "$IS_CHINA" == "true" ]]; then
+        echo -e "${BLUE}│${NC}  推荐: ${GREEN}宝塔面板 (国内版)${NC}"
+        echo -e "${BLUE}│${NC}  来源: ${CYAN}bt.cn${NC}"
+    else
+        echo -e "${BLUE}│${NC}  推荐: ${GREEN}aaPanel (国际版)${NC}"
+        echo -e "${BLUE}│${NC}  来源: ${CYAN}aapanel.com${NC}"
+    fi
+    echo -e "${BLUE}└────────────────────────────────────┘${NC}"
+    echo ""
 
-    log_success "aaPanel 安装完成"
-    log_info "aaPanel 面板信息:"
+    read -rp "$(echo -e "${YELLOW}使用推荐版本? (y=推荐 / cn=强制国内版 / en=强制国际版): ${NC}")" panel_choice
+
+    case "$panel_choice" in
+        cn|CN)
+            IS_CHINA=true
+            log_info "手动选择: 宝塔面板 (国内版)"
+            ;;
+        en|EN)
+            IS_CHINA=false
+            log_info "手动选择: aaPanel (国际版)"
+            ;;
+        *)
+            # 使用自动检测结果
+            ;;
+    esac
+
+    cd /tmp
+
+    if [[ "$IS_CHINA" == "true" ]]; then
+        # ======= 安装国内版宝塔面板 =======
+        log_info "正在下载并安装宝塔面板 (国内版，约需 1-3 分钟) ..."
+
+        local BT_URL="https://download.bt.cn/install/install_lts.sh"
+        if command -v curl &> /dev/null; then
+            curl -ksSO "$BT_URL"
+        else
+            wget --no-check-certificate -O install_lts.sh "$BT_URL"
+        fi
+
+        echo "y" | bash install_lts.sh ed8484bec
+        rm -f install_lts.sh
+
+        log_success "宝塔面板 (国内版) 安装完成"
+    else
+        # ======= 安装国际版 aaPanel =======
+        log_info "正在下载并安装 aaPanel (国际版，约需 1-3 分钟) ..."
+
+        local AA_URL="https://www.aapanel.com/script/install_7.0_en.sh"
+        if command -v curl &> /dev/null; then
+            curl -ksSO "$AA_URL"
+        else
+            wget --no-check-certificate -O install_7.0_en.sh "$AA_URL"
+        fi
+
+        echo "y" | bash install_7.0_en.sh aapanel
+        rm -f install_7.0_en.sh
+
+        log_success "aaPanel (国际版) 安装完成"
+    fi
+
+    log_info "面板信息:"
     bt default 2>/dev/null || true
 }
 
@@ -1232,7 +1328,7 @@ main() {
     interactive_input
 
     install_base_deps
-    install_aapanel
+    install_panel
     install_lnmp
     configure_php
     setup_database
