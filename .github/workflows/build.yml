@@ -10,34 +10,55 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
       contents: write
-    env:
-      CMAKE_GENERATOR: "Visual Studio 17 2022"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Visual Studio
-        run: |
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.x'
+          flutter-version: '3.27.4'
           channel: 'stable'
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Check VS installation
+        run: |
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationVersion
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
 
-      - name: Clean build cache
+      - name: Clean
         run: flutter clean
 
       - name: Get dependencies
         run: flutter pub get
+
+      - name: Patch Flutter cmake generator for VS 2022
+        shell: pwsh
+        run: |
+          # Flutter hardcodes "Visual Studio 16 2019" in some versions
+          # Patch it to use VS 2022 which is available on windows-2022 runner
+          $flutterRoot = (flutter --version --machine | ConvertFrom-Json).flutterRoot
+          if (-not $flutterRoot) {
+            $flutterRoot = (Get-Command flutter).Source | Split-Path | Split-Path
+          }
+          $cmakeFile = Get-ChildItem -Path $flutterRoot -Recurse -Filter "*.dart" | Select-String -Pattern "Visual Studio 16 2019" -List | Select-Object -First 1 -ExpandProperty Path
+          if ($cmakeFile) {
+            Write-Host "Patching: $cmakeFile"
+            (Get-Content $cmakeFile -Raw) -replace 'Visual Studio 16 2019','Visual Studio 17 2022' | Set-Content $cmakeFile
+            Write-Host "Patched successfully"
+          } else {
+            Write-Host "No file found with VS 2019 reference, trying alternative search..."
+            Get-ChildItem -Path $flutterRoot\packages\flutter_tools -Recurse -Filter "*.dart" | Select-String -Pattern "Visual Studio" -List | ForEach-Object { Write-Host $_.Path; Write-Host $_.Line }
+          }
 
       - name: Build Windows
         run: flutter build windows --release
