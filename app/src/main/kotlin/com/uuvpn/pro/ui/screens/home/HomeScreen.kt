@@ -1,6 +1,11 @@
 package com.uuvpn.pro.ui.screens.home
 
+import android.app.Activity
+import android.content.Intent
+import android.net.VpnService
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
@@ -32,12 +37,41 @@ fun HomeScreen(
     val context = LocalContext.current
 
     val isConnected = vpnState == VpnState.CONNECTED
-    val isConnecting = vpnState == VpnState.CONNECTING
+
+    // ===== VPN 权限请求 =====
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            // 用户授权了 VPN 权限，执行连接
+            viewModel.toggleConnection()
+        } else {
+            Toast.makeText(context, "需要 VPN 权限才能连接", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // 监听 Toast 消息
     LaunchedEffect(Unit) {
         viewModel.toastMessage.collectLatest { message ->
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 处理连接按钮点击
+    val handleConnectClick: () -> Unit = {
+        if (vpnState == VpnState.CONNECTED || vpnState == VpnState.CONNECTING) {
+            // 断开不需要权限检查
+            viewModel.toggleConnection()
+        } else {
+            // 连接前先检查 VPN 权限
+            val prepareIntent = VpnService.prepare(context)
+            if (prepareIntent != null) {
+                // 需要用户授权
+                vpnPermissionLauncher.launch(prepareIntent)
+            } else {
+                // 已有权限，直接连接
+                viewModel.toggleConnection()
+            }
         }
     }
 
@@ -81,7 +115,7 @@ fun HomeScreen(
         // ===== 连接按钮 =====
         ConnectButton(
             state = vpnState,
-            onClick = { viewModel.toggleConnection() },
+            onClick = handleConnectClick,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
