@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
+use App\Services\NodePresetService;
 use App\Services\NodeSyncService;
 use Illuminate\Http\Request;
 
@@ -47,6 +48,9 @@ class MachineController extends Controller
             'name' => 'required|string|max:255',
             'notes' => 'nullable|string',
             'is_active' => 'nullable|boolean',
+            'auto_setup' => 'nullable|boolean',
+            'group_ids' => 'nullable|array',
+            'setup_presets' => 'nullable|array',
         ]);
 
         if (!empty($params['id'])) {
@@ -69,10 +73,23 @@ class MachineController extends Controller
             'token' => ServerMachine::generateToken(),
         ]);
 
+        $nodesCreated = 0;
+
+        // 一键搭建：自动创建预设节点
+        if (!empty($params['auto_setup'])) {
+            $nodesCreated = NodePresetService::createPresetNodes(
+                $machine,
+                $params['name'],
+                $params['group_ids'] ?? null,
+                $params['setup_presets'] ?? null
+            );
+        }
+
         return $this->success([
             'id' => $machine->id,
             'token' => $machine->token,
             'install_command' => $this->buildInstallCommand($request, $machine),
+            'nodes_created' => $nodesCreated,
         ]);
     }
 
@@ -199,13 +216,46 @@ class MachineController extends Controller
         return $this->success($history);
     }
 
+    /**
+     * 为已有机器追加预设节点
+     */
+    public function setupPresets(Request $request)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer|exists:v2_server_machine,id',
+            'group_ids' => 'nullable|array',
+            'setup_presets' => 'nullable|array',
+        ]);
+
+        $machine = ServerMachine::find($params['id']);
+
+        $nodesCreated = NodePresetService::createPresetNodes(
+            $machine,
+            $machine->name,
+            $params['group_ids'] ?? null,
+            $params['setup_presets'] ?? null
+        );
+
+        return $this->success([
+            'nodes_created' => $nodesCreated,
+        ]);
+    }
+
+    /**
+     * 获取可用预设列表
+     */
+    public function presets()
+    {
+        return $this->success(NodePresetService::getAvailablePresets());
+    }
+
     private function buildInstallCommand(Request $request, ServerMachine $machine): string
     {
         $panelUrl = rtrim((string) (admin_setting('app_url') ?: $request->getSchemeAndHttpHost()), '/');
-        $installerUrl = 'https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh';
+        $installerUrl = $panelUrl . '/install_node.sh';
 
         return sprintf(
-            'curl -fsSL %s | sudo bash -s -- --mode machine --panel %s --token %s --machine-id %d',
+            'curl -fsSL %s | sudo bash -s -- --panel %s --token %s --machine-id %d --auto-setup',
             $installerUrl,
             escapeshellarg($panelUrl),
             escapeshellarg($machine->token),

@@ -6,10 +6,6 @@ php composer.phar install -vvv
 git submodule update --init --recursive --force
 php artisan xboard:install
 
-if [ -f "/etc/init.d/bt" ] || [ -f "/.dockerenv" ]; then
+if [ -f "/etc/init.d/bt" ]; then
   chown -R www:www $(pwd);
-fi
-
-if [ -d ".docker/.data" ]; then
-  chmod -R 777 .docker/.data
 fi

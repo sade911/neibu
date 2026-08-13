@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\V2\Server;
 
 use App\Http\Controllers\Controller;
+use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
+use App\Services\NodePresetService;
 use App\Services\ServerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -115,6 +117,50 @@ class MachineController extends Controller
         }
 
         return response()->json(['data' => true]);
+    }
+
+    /**
+     * 安装脚本调用：自动创建预设节点
+     */
+    public function autoSetup(Request $request): JsonResponse
+    {
+        $machine = $this->authenticateMachine($request);
+
+        $request->validate([
+            'server_ip' => 'nullable|string',
+            'group_ids' => 'nullable|array',
+            'setup_presets' => 'nullable|array',
+        ]);
+
+        // 如果提供了服务器 IP，更新机器名称中记录
+        $serverIp = $request->input('server_ip');
+        if ($serverIp) {
+            $machine->forceFill(['notes' => ($machine->notes ? $machine->notes . "\n" : '') . 'IP: ' . $serverIp])->saveQuietly();
+        }
+
+        // 检查是否已有节点
+        $existingNodes = Server::where('machine_id', $machine->id)->count();
+
+        $nodesCreated = NodePresetService::createPresetNodes(
+            $machine,
+            $machine->name,
+            $request->input('group_ids'),
+            $request->input('setup_presets')
+        );
+
+        // 返回当前机器的全部节点列表
+        $allNodes = Server::where('machine_id', $machine->id)
+            ->get(['id', 'name', 'type', 'port', 'server_port', 'show', 'enabled'])
+            ->toArray();
+
+        return response()->json([
+            'data' => [
+                'nodes_created' => $nodesCreated,
+                'existing_nodes' => $existingNodes,
+                'total_nodes' => count($allNodes),
+                'nodes' => $allNodes,
+            ],
+        ]);
     }
 
     private function authenticateMachine(Request $request): ServerMachine

@@ -51,7 +51,6 @@ class XboardInstall extends Command
     public function handle()
     {
         try {
-            $isDocker = file_exists('/.dockerenv');
             $enableSqlite = getenv('ENABLE_SQLITE', false);
             $enableRedis = getenv('ENABLE_REDIS', false);
             $adminAccount = getenv('ADMIN_ACCOUNT', false);
@@ -62,17 +61,16 @@ class XboardInstall extends Command
             $this->info("/_/  \_\|____/ \___/ \__,_|_|  \__,_| ");
             if (
                 (File::exists(base_path() . '/.env') && $this->getEnvValue('INSTALLED'))
-                || (getenv('INSTALLED', false) && $isDocker)
             ) {
                 $securePath = admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key'))));
                 $this->info("访问 http(s)://你的站点/{$securePath} 进入管理面板，你可以在用户中心修改你的密码。");
-                $this->warn("如需重新安装请清空目录下 .env 文件的内容（Docker安装方式不可以删除此文件）");
+                $this->warn("如需重新安装请清空目录下 .env 文件的内容");
                 $this->warn("快捷清空.env命令：");
                 note('rm .env && touch .env');
                 return;
             }
             if (is_dir(base_path() . '/.env')) {
-                $this->error('😔：安装失败，Docker环境下安装请保留空的 .env 文件');
+                $this->error('😔：安装失败，请确保 .env 是文件而非目录');
                 return;
             }
             // 选择数据库类型
@@ -100,8 +98,8 @@ class XboardInstall extends Command
             $envConfig['APP_KEY'] = 'base64:' . base64_encode(Encrypter::generateKey('AES-256-CBC'));
             $isReidsValid = false;
             while (!$isReidsValid) {
-                // 判断是否为Docker环境
-                $useBuiltinRedis = $isDocker && ($enableRedis || confirm(label: '是否启用Docker内置的Redis', default: true, yes: '启用', no: '不启用'));
+                // 配置Redis
+                $useBuiltinRedis = false;
                 if ($useBuiltinRedis) {
                     $envConfig['REDIS_HOST'] = '/data/redis.sock';
                     $envConfig['REDIS_PORT'] = 0;
@@ -250,7 +248,7 @@ class XboardInstall extends Command
      */
     private function configureSqlite(): ?array
     {
-        $sqliteFile = '.docker/.data/database.sqlite';
+        $sqliteFile = 'database/database.sqlite';
         if (!file_exists(base_path($sqliteFile))) {
             // 创建空文件
             if (!touch(base_path($sqliteFile))) {

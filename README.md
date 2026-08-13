@@ -18,23 +18,12 @@ Xboard is a modern panel system built on Laravel 11, focusing on providing a cle
 - 🚀 Built with Laravel 12 + Octane for significant performance gains
 - 🎨 Redesigned admin interface (React + Shadcn UI)
 - 📱 Modern user frontend (Vue3 + TypeScript)
-- 🐳 Ready-to-use Docker deployment solution
 - 🎯 Optimized system architecture for better maintainability
 
 ## 🚀 Quick Start
 
-```bash
-git clone -b compose --depth 1 https://github.com/cedar2025/Xboard && \
-cd Xboard && \
-docker compose run -it --rm \
-    -e ENABLE_SQLITE=true \
-    -e ENABLE_REDIS=true \
-    -e ADMIN_ACCOUNT=admin@demo.com \
-    xboard php artisan xboard:install && \
-docker compose up -d
-```
+Please refer to the deployment guides below for installation instructions.
 
-> After installation, visit: http://SERVER_IP:7001  
 > ⚠️ Make sure to save the admin credentials shown during installation
 
 ## 📖 Documentation
@@ -46,10 +35,7 @@ docker compose up -d
 - [Plugin Development Guide](./docs/en/development/plugin-development-guide.md) - Complete guide for developing XBoard plugins
 
 ### Deployment Guides
-- [Deploy with 1Panel](./docs/en/installation/1panel.md)
-- [Deploy with Docker Compose](./docs/en/installation/docker-compose.md)
 - [Deploy with aaPanel](./docs/en/installation/aapanel.md)
-- [Deploy with aaPanel + Docker](./docs/en/installation/aapanel-docker.md) (Recommended)
 
 ### Migration Guides
 - [Migrate from v2board dev](./docs/en/migration/v2board-dev.md)
@@ -61,7 +47,6 @@ docker compose up -d
 - Backend: Laravel 11 + Octane
 - Admin Panel: React + Shadcn UI + TailwindCSS
 - User Frontend: Vue3 + TypeScript + NaiveUI
-- Deployment: Docker + Docker Compose
 - Caching: Redis + Octane Cache
 
 ## 📷 Preview
@@ -90,12 +75,7 @@ However, new feature development may be limited.
 
 ## 🔔 Important Notes
 
-1. Restart required after modifying admin path:
-```bash
-docker compose restart
-```
-
-2. For aaPanel installations, restart the Octane daemon process
+1. Restart required after modifying admin path: restart the Octane daemon process
 
 ## 🤝 Contributing
 
