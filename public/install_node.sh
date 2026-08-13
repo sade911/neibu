@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Xboard Node multi-backend deployment script v2
-# Architecture: xboard-node + xray-core + hysteria2 + tuic + ss-rust + naiveproxy
+# Xboard Node multi-backend deployment script v3
+# Architecture: xboard-node + xray-core + hysteria2 + tuic + ss-rust
 # Ports: randomly assigned
 #
 # Usage:
@@ -10,7 +10,7 @@
 #     --token YOUR_MACHINE_TOKEN \
 #     --machine-id 1
 
-set -euo pipefail
+set -e
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -143,30 +143,9 @@ if [[ ! -f "$SS_BIN" ]]; then
 fi
 [[ -f "$SS_BIN" ]] && echo -e "  ${GREEN}OK: $($SS_BIN --version 2>/dev/null || echo 'ssserver')${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
 
-# [7/13] NaiveProxy
-echo -e "${BLUE}[7/13] Installing NaiveProxy ...${NC}"
-NAIVE_BIN="/usr/local/bin/caddy-naive"
-if [[ ! -f "$NAIVE_BIN" ]]; then
-    CADDY_ARCH="amd64"; [[ "$ARCH" == "arm64" ]] && CADDY_ARCH="arm64"
-    curl -fsSL -o "$NAIVE_BIN" \
-        "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}&p=github.com%2Fcaddyserver%2Fforwardproxy%40caddy2%3Dgithub.com%2Fklzgrad%2Fforwardproxy%40naive" \
-        2>/dev/null && chmod +x "$NAIVE_BIN" || {
-        echo -e "  ${YELLOW}Caddy API failed, trying naiveproxy release...${NC}"
-        NP_VER="v136.0.7103.48-1"
-        command -v jq &>/dev/null && NP_VER=$(curl -s https://api.github.com/repos/klzgrad/naiveproxy/releases/latest 2>/dev/null | jq -r '.tag_name // "v136.0.7103.48-1"') || true
-        NP_ASSET="naiveproxy-${NP_VER}-linux-x64.tar.xz"
-        [[ "$ARCH" == "arm64" ]] && NP_ASSET="naiveproxy-${NP_VER}-linux-arm64.tar.xz"
-        curl -fsSL -o /tmp/naive.tar.xz "https://github.com/klzgrad/naiveproxy/releases/download/${NP_VER}/${NP_ASSET}" 2>/dev/null
-        if [[ -f /tmp/naive.tar.xz ]]; then
-            mkdir -p /tmp/naive-extract
-            tar -xJf /tmp/naive.tar.xz -C /tmp/naive-extract/ 2>/dev/null
-            find /tmp/naive-extract -name "naive" -type f -exec cp {} "$NAIVE_BIN" \; 2>/dev/null
-            chmod +x "$NAIVE_BIN" 2>/dev/null || true
-            rm -rf /tmp/naive.tar.xz /tmp/naive-extract
-        fi
-    }
-fi
-[[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]] && echo -e "  ${GREEN}OK${NC}" || echo -e "  ${YELLOW}SKIP${NC}"
+# [7/13] skip (reserved)
+echo -e "${BLUE}[7/13] Skipping NaiveProxy (server binary not available in China)${NC}"
+NAIVE_BIN=""
 
 # [8/13] TLS cert + Reality keys
 echo -e "${BLUE}[8/13] Generating certs and keys ...${NC}"
@@ -195,27 +174,22 @@ echo -e "${BLUE}[9/13] Assigning random ports ...${NC}"
 SERVER_IP=$(get_server_ip)
 echo -e "  IP: ${GREEN}${SERVER_IP}${NC}"
 
-ALL_PORTS=($(generate_random_ports 20))
+ALL_PORTS=($(generate_random_ports 18))
 
 P_VLESS_R=${ALL_PORTS[0]}; P_VLESS_G=${ALL_PORTS[1]}; P_TROJAN=${ALL_PORTS[2]}
 P_VMESS=${ALL_PORTS[3]}; P_HY2=${ALL_PORTS[4]}; P_HY2O=${ALL_PORTS[5]}
 P_SS22=${ALL_PORTS[6]}; P_SSC=${ALL_PORTS[7]}; P_TUIC=${ALL_PORTS[8]}
-P_NAIVE=${ALL_PORTS[9]}
 
-PW_VLESS_R=${ALL_PORTS[10]}; PW_VLESS_G=${ALL_PORTS[11]}; PW_TROJAN=${ALL_PORTS[12]}
-PW_VMESS=${ALL_PORTS[13]}; PW_HY2=${ALL_PORTS[14]}; PW_HY2O=${ALL_PORTS[15]}
-PW_SS22=${ALL_PORTS[16]}; PW_SSC=${ALL_PORTS[17]}; PW_TUIC=${ALL_PORTS[18]}
-PW_NAIVE=${ALL_PORTS[19]}
+PW_VLESS_R=${ALL_PORTS[9]}; PW_VLESS_G=${ALL_PORTS[10]}; PW_TROJAN=${ALL_PORTS[11]}
+PW_VMESS=${ALL_PORTS[12]}; PW_HY2=${ALL_PORTS[13]}; PW_HY2O=${ALL_PORTS[14]}
+PW_SS22=${ALL_PORTS[15]}; PW_SSC=${ALL_PORTS[16]}; PW_TUIC=${ALL_PORTS[17]}
 
 OBFS_PASSWORD=$(openssl rand -hex 8)
-NAIVE_USER="user"
-NAIVE_PASS=$(openssl rand -hex 12)
 
 echo -e "  xray:      VLESS:${P_VLESS_R} gRPC:${P_VLESS_G} Trojan:${P_TROJAN} VMess:${P_VMESS}"
 echo -e "  hysteria2: Hy2:${P_HY2} Hy2OBFS:${P_HY2O}"
 echo -e "  tuic:      TUIC:${P_TUIC}"
 echo -e "  ss-rust:   SS2022:${P_SS22} SSClassic:${P_SSC}"
-echo -e "  naive:     NaiveProxy:${P_NAIVE}"
 
 # [10/13] Generate config files
 echo -e "${BLUE}[10/13] Generating config files ...${NC}"
@@ -347,7 +321,8 @@ tls:
 ${OBFS_BLOCK}
 auth:
   type: userpass
-  userpass: {}
+  userpass:
+    00000000-0000-0000-0000-000000000000: placeholder
 
 masquerade:
   type: proxy
@@ -363,7 +338,7 @@ for INST in "tuic.json:${P_TUIC}" "tuic-warp.json:${PW_TUIC}"; do
     cat > "${CONFIG_DIR}/${FNAME}" << TUICEOF
 {
   "server": "[::]:${FPORT}",
-  "users": {},
+  "users": {"00000000-0000-0000-0000-000000000000": "placeholder"},
   "certificate": "${CERT_FILE}",
   "private_key": "${KEY_FILE}",
   "congestion_control": "bbr",
@@ -386,37 +361,6 @@ cat > "${CONFIG_DIR}/ss.json" << SSEOF
 }
 SSEOF
 
-# NaiveProxy
-if [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]]; then
-cat > "${CONFIG_DIR}/naive.json" << NAIVEEOF
-{
-  "apps": {
-    "http": {
-      "servers": {
-        "naive-direct": {
-          "listen": [":${P_NAIVE}"],
-          "routes": [{"handle": [{"handler": "forward_proxy", "hide_ip": true, "hide_via": true, "auth_user_deprecated": "${NAIVE_USER}", "auth_pass_deprecated": "${NAIVE_PASS}", "probe_resistance": {}}]}],
-          "tls_connection_policies": [{"certificate_selection": {"any_tag": ["naive"]}}],
-          "automatic_https": {"disable": true}
-        },
-        "naive-warp": {
-          "listen": [":${PW_NAIVE}"],
-          "routes": [{"handle": [{"handler": "forward_proxy", "hide_ip": true, "hide_via": true, "auth_user_deprecated": "${NAIVE_USER}", "auth_pass_deprecated": "${NAIVE_PASS}", "probe_resistance": {}}]}],
-          "tls_connection_policies": [{"certificate_selection": {"any_tag": ["naive"]}}],
-          "automatic_https": {"disable": true}
-        }
-      }
-    },
-    "tls": {
-      "certificates": {
-        "load_files": [{"certificate": "${CERT_FILE}", "key": "${KEY_FILE}", "tags": ["naive"]}]
-      }
-    }
-  }
-}
-NAIVEEOF
-fi
-
 echo -e "  ${GREEN}OK${NC}"
 
 # [11/13] Register nodes
@@ -431,8 +375,6 @@ REALITY_PRIVATE_KEY=${REALITY_PRIVATE_KEY}
 REALITY_PUBLIC_KEY=${REALITY_PUBLIC_KEY}
 REALITY_SHORT_ID=${REALITY_SHORT_ID}
 OBFS_PASSWORD=${OBFS_PASSWORD}
-NAIVE_USER=${NAIVE_USER}
-NAIVE_PASS=${NAIVE_PASS}
 SS_SERVER_KEY=${SS_SERVER_KEY}
 ENVEOF
 chmod 600 "${CONFIG_DIR}/.env"
@@ -581,6 +523,7 @@ done
 mkdir -p /etc/systemd/system/xray.service.d
 cat > /etc/systemd/system/xray.service.d/override.conf << EOF
 [Service]
+User=root
 ExecStart=
 ExecStart=/usr/local/bin/xray run -config ${CONFIG_DIR}/xray.json
 EOF
@@ -627,24 +570,9 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-if [[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]]; then
-cat > /etc/systemd/system/naive.service << EOF
-[Unit]
-Description=NaiveProxy
-After=network.target
-[Service]
-ExecStart=${NAIVE_BIN} run --config ${CONFIG_DIR}/naive.json
-Restart=always
-RestartSec=3
-[Install]
-WantedBy=multi-user.target
-EOF
-fi
-
 systemctl daemon-reload
 
 SERVICES=(xray hy2-direct hy2-obfs-direct hy2-warp hy2-obfs-warp tuic-direct tuic-warp ssserver)
-[[ -n "$NAIVE_BIN" && -f "$NAIVE_BIN" ]] && SERVICES+=(naive)
 
 "${CONFIG_DIR}/sync_users.sh" 2>/dev/null || true
 
