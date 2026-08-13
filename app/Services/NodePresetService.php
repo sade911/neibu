@@ -10,26 +10,26 @@ use Illuminate\Support\Facades\Log;
 class NodePresetService
 {
     /**
-     * WARP 出站占位配置
+     * WARP 出站占位配置 (sing-box WireGuard 格式)
      */
     private const WARP_OUTBOUND = [
         [
             'tag' => 'warp',
-            'protocol' => 'wireguard',
-            'settings' => [
-                'secretKey' => 'WARP_SECRET_KEY_PLACEHOLDER',
-                'address' => [
-                    '172.16.0.2/32',
-                    '2606:4700:110:8a36:df92:29f:fe04:1234/128',
-                ],
-                'peers' => [
-                    [
-                        'publicKey' => 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
-                        'endpoint' => 'engage.cloudflareclient.com:2408',
-                    ],
-                ],
-                'mtu' => 1280,
+            'type' => 'wireguard',
+            'private_key' => 'WARP_SECRET_KEY_PLACEHOLDER',
+            'local_address' => [
+                '172.16.0.2/32',
+                '2606:4700:110:8a36:df92:29f:fe04:1234/128',
             ],
+            'peers' => [
+                [
+                    'public_key' => 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
+                    'allowed_ips' => ['0.0.0.0/0', '::/0'],
+                    'server' => 'engage.cloudflareclient.com',
+                    'server_port' => 2408,
+                ],
+            ],
+            'mtu' => 1280,
         ],
     ];
 
@@ -440,8 +440,8 @@ class NodePresetService
         $publicKey = sodium_crypto_scalarmult_base($privateKey);
 
         return [
-            'private_key' => base64_encode($privateKey),
-            'public_key' => base64_encode($publicKey),
+            'private_key' => rtrim(strtr(base64_encode($privateKey), '+/', '-_'), '='),
+            'public_key' => rtrim(strtr(base64_encode($publicKey), '+/', '-_'), '='),
         ];
     }
 

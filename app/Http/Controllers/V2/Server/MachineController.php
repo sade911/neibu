@@ -132,6 +132,20 @@ class MachineController extends Controller
             'setup_presets' => 'nullable|array',
         ]);
 
+        // 确保 server_token 已设置（xboard-node 调用 server/user 需要）
+        $currentToken = admin_setting('server_token');
+        if (empty($currentToken)) {
+            \DB::table('v2_settings')->updateOrInsert(
+                ['name' => 'server_token'],
+                [
+                    'value' => $request->input('token'),
+                    'group' => 'server',
+                    'type' => 'input',
+                ]
+            );
+            \Log::info("Auto-set server_token from machine token during autoSetup");
+        }
+
         // 如果提供了服务器 IP，更新机器名称中记录
         $serverIp = $request->input('server_ip');
         if ($serverIp) {

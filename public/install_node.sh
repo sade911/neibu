@@ -141,6 +141,40 @@ echo -e "${GREEN}✓ xboard-node 安装完成${NC}"
 echo ""
 
 # ============================================================
+# Step 1.5: 生成 TLS 证书 + 配置环境变量（Hysteria2/TUIC 需要）
+# ============================================================
+echo -e "${BLUE}[1.5/3] 配置 TLS 证书（Hysteria2/TUIC 协议需要）...${NC}"
+
+CERT_DIR="/etc/xboard-node/cert"
+CERT_FILE_PATH="${CERT_DIR}/fullchain.pem"
+KEY_FILE_PATH="${CERT_DIR}/key.pem"
+
+if [[ ! -f "$CERT_FILE_PATH" ]] || [[ ! -f "$KEY_FILE_PATH" ]]; then
+    mkdir -p "$CERT_DIR"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -days 3650 -nodes \
+        -keyout "$KEY_FILE_PATH" \
+        -out "$CERT_FILE_PATH" \
+        -subj "/CN=www.bing.com" 2>/dev/null
+    echo -e "  ${GREEN}✓ 自签证书已生成${NC}"
+else
+    echo -e "  ${YELLOW}⚠ 证书已存在，跳过生成${NC}"
+fi
+
+# 配置 systemd 环境变量
+SYSTEMD_DROP_IN="/etc/systemd/system/xboard-node.service.d"
+mkdir -p "$SYSTEMD_DROP_IN"
+cat > "${SYSTEMD_DROP_IN}/cert.conf" << CERTEOF
+[Service]
+Environment="CERT_FILE=${CERT_FILE_PATH}"
+Environment="KEY_FILE=${KEY_FILE_PATH}"
+CERTEOF
+
+systemctl daemon-reload
+echo -e "  ${GREEN}✓ systemd 环境变量已配置${NC}"
+echo ""
+
+# ============================================================
 # Step 2: 获取服务器信息
 # ============================================================
 echo -e "${BLUE}[2/3] 检测服务器信息 ...${NC}"
@@ -244,8 +278,20 @@ else
 fi
 
 # ============================================================
-# 完成
+# 完成：重启 xboard-node 使证书配置生效
 # ============================================================
+echo ""
+echo -e "${BLUE}重启 xboard-node 使配置生效...${NC}"
+systemctl restart xboard-node
+sleep 3
+
+# 检查运行状态
+if systemctl is-active --quiet xboard-node; then
+    echo -e "${GREEN}✓ xboard-node 运行正常${NC}"
+else
+    echo -e "${RED}✗ xboard-node 启动异常，请检查日志: journalctl -u xboard-node${NC}"
+fi
+
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║                    部署完成！                         ║${NC}"
@@ -254,6 +300,7 @@ echo -e "${GREEN}║                                                      ║${N
 echo -e "${GREEN}║  1. 登录面板管理后台查看节点列表                       ║${NC}"
 echo -e "${GREEN}║  2. WARP 节点需手动配置 WireGuard 密钥                ║${NC}"
 echo -e "${GREEN}║  3. 确认无误后将节点 show 设为可见                     ║${NC}"
+echo -e "${GREEN}║  4. 查看日志: journalctl -u xboard-node -f            ║${NC}"
 echo -e "${GREEN}║                                                      ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
