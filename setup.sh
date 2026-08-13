@@ -969,6 +969,21 @@ deploy_xboard() {
     fi
     log_success "Composer 依赖安装完成"
 
+    # ====== Swoole 4.x / Octane 兼容性补丁 ======
+    local SWOOLE_TABLE_FILE="${SITE_DIR}/vendor/laravel/octane/src/Tables/SwooleTable.php"
+    if [[ -f "$SWOOLE_TABLE_FILE" ]]; then
+        local swoole_ver
+        swoole_ver=$(${PHP_BIN} -r "echo swoole_version();" 2>/dev/null || echo "0")
+        local swoole_major
+        swoole_major=$(echo "$swoole_ver" | cut -d. -f1)
+
+        if [[ "$swoole_major" -lt 5 ]]; then
+            log_info "检测到 Swoole ${swoole_ver} (< 5.x)，修补 Octane 兼容性 ..."
+            sed -i 's/public function column(string $name, int $type, int $size = 0): bool/public function column($name, $type, $size = 0)/' "$SWOOLE_TABLE_FILE"
+            log_success "Octane SwooleTable 兼容性补丁已应用"
+        fi
+    fi
+
     # 初始化 Git 子模块 (前端主题)
     log_info "初始化前端主题 ..."
     git submodule update --init --recursive --force 2>&1
